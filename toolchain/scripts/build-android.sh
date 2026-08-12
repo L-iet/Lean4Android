@@ -3,7 +3,8 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
 require_command cmake
-require_file "$HOST_BUILD/stage1/bin/lean"
+require_patched_lean_checkout
+require_file "$HOST_BUILD/stage0/bin/lean"
 require_file "$ANDROID_DEPS/lib/pkgconfig/libuv.pc"
 require_file "$ANDROID_DEPS/lib/libssl.a"
 require_file "$NDK_ROOT/build/cmake/android.toolchain.cmake"
@@ -19,9 +20,12 @@ cmake -S "$LEAN_SOURCE/src" -B "$ANDROID_BUILD" -G "Unix Makefiles" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH="$ANDROID_DEPS" \
   -DOPENSSL_ROOT_DIR="$ANDROID_DEPS" \
+  -DOPENSSL_INCLUDE_DIR="$ANDROID_DEPS/include" \
+  -DOPENSSL_CRYPTO_LIBRARY="$ANDROID_DEPS/lib/libcrypto.a" \
+  -DOPENSSL_SSL_LIBRARY="$ANDROID_DEPS/lib/libssl.a" \
   -DOPENSSL_USE_STATIC_LIBS=TRUE \
   -DSTAGE=1 \
-  -DPREV_STAGE="$HOST_BUILD/stage1" \
+  -DPREV_STAGE="$HOST_BUILD/stage0" \
   -DPREV_STAGE_CMAKE_EXECUTABLE_SUFFIX= \
   -DLEAN_PLATFORM_TARGET=aarch64-linux-android \
   -DLEAN_CXX_STDLIB=-lc++_static \

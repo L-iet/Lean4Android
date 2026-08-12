@@ -1,3 +1,5 @@
+# Original Plan for a Lean Android code editor (May be obsolete)
+
 Yes. What you're describing is essentially **a self-contained Lean development environment for Android**:
 
 ```text

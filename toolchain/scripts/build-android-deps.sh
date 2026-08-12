@@ -6,8 +6,8 @@ require_command cmake
 require_command make
 require_command perl
 require_file "$NDK_ROOT/build/cmake/android.toolchain.cmake"
-require_clean_checkout "$LIBUV_SOURCE" "$LIBUV_COMMIT"
-require_clean_checkout "$OPENSSL_SOURCE" "$OPENSSL_COMMIT"
+require_pinned_checkout "$LIBUV_SOURCE" "$LIBUV_COMMIT"
+require_pinned_checkout "$OPENSSL_SOURCE" "$OPENSSL_COMMIT"
 mkdir -p "$ANDROID_DEPS"
 export ANDROID_NDK_ROOT="$NDK_ROOT"
 export PATH="$NDK_TOOLCHAIN/bin:$PATH"
@@ -33,8 +33,7 @@ pushd "$OPENSSL_BUILD" >/dev/null
 "$OPENSSL_SOURCE/Configure" android-arm64 \
   --prefix="$ANDROID_DEPS" \
   --openssldir="$ANDROID_DEPS/ssl" \
-  -D__ANDROID_API__="$MINIMUM_API" \
-  no-shared no-tests no-apps no-docs
+  no-shared no-tests no-apps no-docs no-legacy
 make -j"$JOBS"
 make install_sw
 popd >/dev/null

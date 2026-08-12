@@ -4,7 +4,7 @@ source "$(dirname "$0")/common.sh"
 
 require_command cmake
 require_command make
-require_clean_checkout "$LEAN_SOURCE" "$LEAN_COMMIT"
+require_patched_lean_checkout
 
 cmake -S "$LEAN_SOURCE" -B "$HOST_BUILD" -G "Unix Makefiles" \
   -DCMAKE_BUILD_TYPE=Release \
@@ -15,5 +15,5 @@ cmake -S "$LEAN_SOURCE" -B "$HOST_BUILD" -G "Unix Makefiles" \
   -DLEANTAR=/bin/false \
   -DINSTALL_CADICAL=OFF \
   -DINSTALL_LEANTAR=OFF
-cmake --build "$HOST_BUILD" --target stage1 --parallel "$JOBS"
-"$HOST_BUILD/stage1/bin/lean" --version
+cmake --build "$HOST_BUILD" --target stage0 --parallel "$JOBS"
+"$HOST_BUILD/stage0/bin/lean" --version

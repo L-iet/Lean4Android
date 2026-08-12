@@ -44,11 +44,14 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 
 - Pinned the exact Lean, LibUV, and OpenSSL commits in addition to their release tags.
 - Added scripts that fetch and verify source revisions, build the native host bootstrap, cross-build static Android dependencies, build Lean's generated C/runtime for Android arm64 API 29, assemble a distribution, audit ELF architecture/dependencies, and generate a hashed manifest.
-- Added a narrow upstream patch that applies Lean's ELF/PIC linker behavior to Android while omitting unsupported `-rdynamic` flags.
+- Added a narrow upstream patch that applies Lean's ELF/PIC linker behavior to Android. Android retains upstream symbol exports required by interpreted/native module loading.
 - Kept generated sources, build trees, and distributions outside version control; promotion into APK inputs remains explicit.
 
 ### Validation in progress
 
 - The fetch stage resolves Lean `f054605aea4b840552cca2e725580bffd1e1b704`, LibUV `e9f29cb984231524e3931aa0ae2c5dae1a32884e`, and OpenSSL `7b371d80d959ec9ab4139d09d78e83c090de9779` and applies the Android patch cleanly.
-- LibUV 1.48.0 cross-compiles successfully with NDK 28.2 for arm64 API 29.
-- Lean's host stage0 bootstrap and OpenSSL 3.6.0 Android build are compiling. The Android Lean link, distribution audit, APK integration, and device execution have not passed yet.
+- LibUV 1.48.0 and OpenSSL 3.6.0 cross-compile successfully with NDK 28.2 for arm64 API 29; archive members are verified ELF64 AArch64 objects.
+- Lean's host stage0 bootstrap completes and runs. The Android target correctly uses it as the previous-stage compiler instead of unnecessarily building host stage1.
+- Source validation now rejects revision drift, untracked dependency sources, and any Lean source delta other than the exact checked-in Android patch.
+- Resume check: no build process was left running. `bash -n toolchain/scripts/*.sh` passes, the host bootstrap reports Lean `4.32.0-pre`, all three Android dependency archives are present, and the pinned source checkout integrity checks pass.
+- The Android Lean link, distribution audit, APK integration, and device execution have not passed yet.
