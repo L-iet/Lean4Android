@@ -37,3 +37,18 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 
 - Implement the reproducible Lean host-bootstrap/Android-target build and ELF audit.
 - Replace the inspection-only probe with `lean --version`, valid-file, invalid-file, and LSP-handshake device probes.
+
+## 2026-08-11 — M1 reproducible cross-build pipeline
+
+### Implemented
+
+- Pinned the exact Lean, LibUV, and OpenSSL commits in addition to their release tags.
+- Added scripts that fetch and verify source revisions, build the native host bootstrap, cross-build static Android dependencies, build Lean's generated C/runtime for Android arm64 API 29, assemble a distribution, audit ELF architecture/dependencies, and generate a hashed manifest.
+- Added a narrow upstream patch that applies Lean's ELF/PIC linker behavior to Android while omitting unsupported `-rdynamic` flags.
+- Kept generated sources, build trees, and distributions outside version control; promotion into APK inputs remains explicit.
+
+### Validation in progress
+
+- The fetch stage resolves Lean `f054605aea4b840552cca2e725580bffd1e1b704`, LibUV `e9f29cb984231524e3931aa0ae2c5dae1a32884e`, and OpenSSL `7b371d80d959ec9ab4139d09d78e83c090de9779` and applies the Android patch cleanly.
+- LibUV 1.48.0 cross-compiles successfully with NDK 28.2 for arm64 API 29.
+- Lean's host stage0 bootstrap and OpenSSL 3.6.0 Android build are compiling. The Android Lean link, distribution audit, APK integration, and device execution have not passed yet.

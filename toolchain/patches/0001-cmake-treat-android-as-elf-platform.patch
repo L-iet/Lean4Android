@@ -1,0 +1,36 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 23cb5cd..29c75cf 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -502,7 +502,7 @@ endif()
+ 
+ # flags for user binaries = flags for toolchain binaries + Lake
+ set(LEANC_STATIC_LINKER_FLAGS " ${TOOLCHAIN_STATIC_LINKER_FLAGS} -lLake")
+-if(CMAKE_SYSTEM_NAME MATCHES "Linux")
++if(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
+   set(LEANC_SHARED_LINKER_FLAGS " ${TOOLCHAIN_SHARED_LINKER_FLAGS} -Wl,--as-needed -lLake_shared -Wl,--no-as-needed")
+ else()
+   set(LEANC_SHARED_LINKER_FLAGS " ${TOOLCHAIN_SHARED_LINKER_FLAGS} -lLake_shared")
+@@ -549,7 +549,7 @@ if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin")
+   string(APPEND LEAN_EXTRA_LINKER_FLAGS " -lm")
+ endif()
+ 
+-if(CMAKE_SYSTEM_NAME MATCHES "Linux")
++if(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
+   if(BSYMBOLIC)
+     string(APPEND LEANC_SHARED_LINKER_FLAGS " -Wl,-Bsymbolic")
+     string(APPEND TOOLCHAIN_SHARED_LINKER_FLAGS " -Wl,-Bsymbolic")
+@@ -583,11 +583,11 @@ elseif(CMAKE_SYSTEM_NAME MATCHES "Windows")
+   )
+ endif()
+ 
+-if(CMAKE_SYSTEM_NAME MATCHES "Linux")
++if(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
+   string(APPEND LEAN_EXTRA_LINKER_FLAGS " -ldl")
+ endif()
+ 
+-if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT CMAKE_SYSTEM_NAME MATCHES "Emscripten")
++if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows|Android" AND NOT CMAKE_SYSTEM_NAME MATCHES "Emscripten")
+   # export symbols for the interpreter (done via `LEAN_EXPORT` for Windows)
+   string(APPEND LEAN_DYN_EXE_LINKER_FLAGS " -rdynamic")
+   string(APPEND CMAKE_EXE_LINKER_FLAGS " -rdynamic")

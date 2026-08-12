@@ -9,3 +9,7 @@ externalNativeBuild/
 .cxx/
 .android-sdk/
 .gradle-user-home/
+toolchain/work/
+toolchain/output/
+__pycache__/
+*.pyc

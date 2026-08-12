@@ -1,8 +1,12 @@
 lean_version = "4.32.1"
 lean_tag = "v4.32.1"
+lean_commit = "f054605aea4b840552cca2e725580bffd1e1b704"
 ndk_version = "28.2.13676358"
+libuv_version = "1.48.0"
+libuv_commit = "e9f29cb984231524e3931aa0ae2c5dae1a32884e"
+openssl_version = "3.6.0"
+openssl_commit = "7b371d80d959ec9ab4139d09d78e83c090de9779"
 target_abi = "arm64-v8a"
 minimum_api = 29
 revision = 1
 toolchain_id = "lean-4.32.1-android1"
-
