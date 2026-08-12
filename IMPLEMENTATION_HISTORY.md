@@ -54,4 +54,5 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 - Lean's host stage0 bootstrap completes and runs. The Android target correctly uses it as the previous-stage compiler instead of unnecessarily building host stage1.
 - Source validation now rejects revision drift, untracked dependency sources, and any Lean source delta other than the exact checked-in Android patch.
 - Resume check: no build process was left running. `bash -n toolchain/scripts/*.sh` passes, the host bootstrap reports Lean `4.32.0-pre`, all three Android dependency archives are present, and the pinned source checkout integrity checks pass.
+- Resumed `LEAN4ANDROID_JOBS=16 toolchain/scripts/build-android.sh`: CMake configuration and all native runtime/core targets completed, then the stdlib phase failed because Clang was invoked for generated `Lean/Meta/InferType.c` before that file existed. This is under investigation as a parallel generated-source dependency race; no Android executable was linked by this run.
 - The Android Lean link, distribution audit, APK integration, and device execution have not passed yet.
