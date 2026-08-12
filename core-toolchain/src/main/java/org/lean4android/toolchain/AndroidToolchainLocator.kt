@@ -4,11 +4,12 @@ import android.content.Context
 import org.lean4android.model.ToolchainHealth
 import org.lean4android.model.ToolchainId
 import org.lean4android.model.ToolchainLayout
+import java.io.File
 
 class AndroidToolchainLocator(private val context: Context) {
     fun locate(): ToolchainHealth {
         val nativeDirectory = context.applicationInfo.nativeLibraryDir
-            ?.let(::java.io.File)
+            ?.let(::File)
             ?: return ToolchainHealth.Missing(listOf("Android did not provide nativeLibraryDir"))
         val sysroot = context.noBackupFilesDir.resolve("toolchains/${BuildConfig.TOOLCHAIN_ID}")
         val layout = ToolchainLayout(
@@ -30,4 +31,3 @@ class AndroidToolchainLocator(private val context: Context) {
         is ToolchainHealth.Missing -> health.problems.joinToString(separator = "\n", prefix = "Not ready:\n• ")
     }
 }
-

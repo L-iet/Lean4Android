@@ -27,12 +27,13 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 
 - Source/configuration structure was inspected locally.
 - The toolchain JSON schema parses successfully; official wrapper artifacts were downloaded and checksummed.
-- The Gradle wrapper starts and reports the expected environmental failure: no Java executable or `JAVA_HOME` is available.
-- Compilation and Android tests are currently blocked because this workspace has no JDK, Gradle, Android SDK, NDK, or ADB installed.
+- Installed JDK 17 and the pinned local Android SDK 36, build-tools 35.0.0, NDK 28.2.13676358, CMake 3.22.1, and platform-tools packages.
+- Migrated all modules to Kotlin 2.3's typed `compilerOptions` JVM-target DSL and fixed the toolchain locator's `File` constructor reference found by the first compilation.
+- `./gradlew testDebugUnitTest :app:assembleDebug` passes; the model/process unit tests succeed and the debug APK is produced.
+- Installed the debug APK on a physical arm64 Android device. The Compose probe launched successfully and correctly reported all three not-yet-packaged toolchain components as absent.
 - No Lean Android binaries exist yet, so the probe is expected to report a missing toolchain.
 
 ### Next
 
-- Run the first wrapper build once a JDK/SDK is available.
 - Implement the reproducible Lean host-bootstrap/Android-target build and ELF audit.
 - Replace the inspection-only probe with `lean --version`, valid-file, invalid-file, and LSP-handshake device probes.
