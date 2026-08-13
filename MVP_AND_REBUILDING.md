@@ -324,6 +324,8 @@ Lake expects conventional paths. The installer/locator must provide links concep
 
 The installation marker is schema- and toolchain-aware. Legacy ID-only markers migrate in place only after the representative `Init` `.olean`, `.olean.private`, `.olean.server`, `.ilean`, and `.ir` facets validate as nonempty. An unhealthy active tree is never accepted solely because a marker exists: the installer clears stale staging, preflights the measured 2,194,903,155-byte packaged sysroot plus a 64 MiB reserve, validates a new staging tree before activation, preserves the former tree as `.previous` during the rename, and restores a healthy previous tree after interrupted activation. Complete per-file manifest/hash verification remains a later hardening layer.
 
+APK staging also generates `assets/toolchain-manifest.tsv` from the audited distribution manifest. It contains path, size, and SHA-256 for all 14,864 files that survive runtime filtering; generation fails if a staged path is unaudited or its size differs. Hashes are reused from the already-audited distribution so staging does not reread 2.19 GB. The Kotlin parser rejects traversal, duplicates, malformed sizes/hashes, and unknown records, while the streaming verifier detects missing, wrong-size, and same-size corrupted files. Binding this verifier and manifest digest into installation schema 2 remains the next integration step; schema 1 still uses representative facets.
+
 Writable links are metadata, not copied executable code.
 
 ## 7. Rebuild recipes by change type

@@ -251,3 +251,15 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 - Added unit tests for healthy schema markers, safe legacy migration, wrong schema/ID reporting, empty/missing split facets, and the exact free-space threshold. `:core-toolchain:testDebugUnitTest :app:compileDebugKotlin` passes.
 - Complete per-file manifest/hash validation, injected rename interruption, actual low-storage behavior, and corrupted-device repair remain explicitly open; representative facet validation is not being treated as complete corruption coverage.
 - The full `testDebugUnitTest :app:assembleDebug` regression passes in 4m38s. Update-installed it over the reference tablet's legacy ID-only marker and invoked migration through the visual Check path. The marker changed in place to `schema=1` plus the matching toolchain ID, the existing 2,175,531 KiB sysroot was retained, no `.installing` or `.previous` tree remained, and Lean exited 0 with expected output in 3,212 ms.
+
+## 2026-08-13 — Complete filtered-runtime manifest foundation
+
+### Implemented
+
+- Added a build-time filtered-manifest generator that maps every staged sysroot file back to the audited distribution manifest. It fails on unaudited paths or size drift and emits a compact tab-separated manifest containing relative path, byte size, and the audited SHA-256.
+- Added a strict Kotlin runtime-manifest parser and streaming verifier. Paths cannot be absolute or traverse upward; duplicate paths, malformed records/sizes/hashes, missing files, wrong sizes, and same-size content corruption are reported.
+
+### Validation and boundary
+
+- Generated a 14,864-file manifest with SHA-256 `f7e389dcee7bd8f146fcd9e7f05ca6ddc9243bd3e99e3261a5dee79e7d1aa797`. `:core-toolchain:testDebugUnitTest :app:writeFilteredToolchainManifest` passes, including missing, size-corrupt, hash-corrupt, traversal, duplicate, and malformed-hash cases.
+- The first generation took approximately eight minutes because enumerating thousands of files on `/mnt/d` is slow; no 2.19 GB rehash was performed. This checkpoint deliberately does not claim installed-tree enforcement yet: binding the manifest digest and one-time full verification into schema 2 is the next step, and routine visual Check must not rehash the sysroot.

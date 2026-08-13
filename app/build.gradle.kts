@@ -28,6 +28,25 @@ val stageToolchainSysroot by tasks.registering(Sync::class) {
     into(generatedToolchain.map { it.dir("assets/toolchain") })
 }
 
+val writeFilteredToolchainManifest by tasks.registering(Exec::class) {
+    dependsOn(stageToolchainSysroot)
+    val stagedRoot = generatedToolchain.map { it.dir("assets/toolchain") }
+    val output = generatedToolchain.map { it.file("assets/toolchain-manifest.tsv") }
+    inputs.file(toolchainDistribution.file("manifest.json"))
+    inputs.dir(stagedRoot)
+    outputs.file(output)
+    commandLine(
+        "python3",
+        rootProject.layout.projectDirectory.file("toolchain/scripts/write-filtered-manifest.py").asFile,
+        "--source-manifest",
+        toolchainDistribution.file("manifest.json").asFile,
+        "--staged-root",
+        stagedRoot.get().asFile,
+        "--output",
+        output.get().asFile,
+    )
+}
+
 android {
     namespace = "org.lean4android.app"
     compileSdk = 36
@@ -68,7 +87,7 @@ android {
 }
 
 tasks.named("preBuild").configure {
-    dependsOn(stageToolchainNative, stageToolchainSysroot)
+    dependsOn(stageToolchainNative, writeFilteredToolchainManifest)
 }
 
 kotlin {

@@ -398,7 +398,7 @@ These are valuable, but each expands the executable-code, package-management, UI
 ## 9. Immediate next actions
 
 1. Connect the tested framing/document-version layer to app-owned long-lived server state; retain the passing automated `lake serve` initialize/registration/did-open/diagnostics/shutdown/exit and forced-cleanup device cases.
-2. Add a complete filtered-runtime manifest/hash verifier, then instrument interrupted activation, low-storage, corruption repair, cold update, offline behavior, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
+2. Bind the generated complete filtered-runtime manifest and streaming verifier into installation schema 2, then instrument interrupted activation, low-storage, corruption repair, cold update, offline behavior, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
 3. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, termination, and visual-editor cases.
 4. Run the M1.6 delivery prototypes using the measured 803.7 MB debug APK and approximately 2.18 GB writable sysroot, then select release-channel packaging before expanding into project/editor features.
 5. Close M1 with an ADR for child processes, Bionic heap-tagging behavior, sysroot/layout patches, and the supported process/tool capability boundary.
