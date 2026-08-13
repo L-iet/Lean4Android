@@ -19,9 +19,6 @@ val stageToolchainSysroot by tasks.registering(Sync::class) {
         exclude(
             "**/*.a",
             "**/*.export",
-            "**/*.ir",
-            "**/*.olean.private",
-            "**/*.olean.server",
             "**/*.o",
             "**/*.c",
             "**/*.depend",
