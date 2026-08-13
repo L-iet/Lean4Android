@@ -149,6 +149,8 @@ Run a short prototype comparing a native Android code editor with CodeMirror 6 i
 
 If CodeMirror wins, keep the bridge small and typed. JavaScript sends document edits and user actions; Kotlin owns files, processes, and LSP. Never expose a broad `addJavascriptInterface` object or filesystem paths to untrusted page content. Bundle all web assets and disable remote navigation/file access.
 
+Before that bake-off, M1 includes a deliberately disposable native Compose visual probe: one fixed `Main.lean`, a multiline plain-text field, explicit Check action, and selectable process output. It validates the end-to-end edit/save/Lean/result interaction on a real device without prematurely choosing the production editor or coupling UI state to Lake/LSP architecture. It is not the M3 editor and should not grow a project tree, syntax engine, or live protocol client.
+
 ### 3.2 Process supervision
 
 Implement one component as the only way to start native tools. It must:
@@ -253,6 +255,7 @@ Exit: clean CI builds an APK and records reproducible inputs.
 - Package executable code in the APK-native location and data in a versioned sysroot.
 - Maintain the canonical Android patch and complete clean-build reproducibility.
 - Pass version and valid/invalid file checks through the production process boundary.
+- Provide a minimal single-file Compose editor probe that saves app-private source and displays direct Lean output for visual testing.
 - Preserve the passing API-33 checks for Lake child builds, LSP lifecycle initialization, process termination, cold restart, and Unicode/space paths while adding document diagnostics, offline verification, RSS/timing data, and API-level coverage.
 - Publish native, sysroot, memory, startup, and latency measurements.
 
@@ -325,6 +328,8 @@ Exit: signed beta passes the release test matrix with no critical data-loss, san
 
 ## 6. Test strategy
 
+The device-confirmed visual editor is a continuous acceptance baseline, not a disposable capability. Every milestone that changes application UI, toolchain installation/layout, command construction, process supervision, project storage, or LSP wiring must preserve a visually operable editor and revalidate an end-to-end edit/save/Lean/result path. The M1 Compose probe may be refactored or replaced by the planned production editor, but the repository must not return to a probe-only or headless state.
+
 ### Host unit tests
 
 - JSON-RPC framing with fragmented/coalesced UTF-8 messages and malformed headers.
@@ -392,7 +397,7 @@ These are valuable, but each expands the executable-code, package-management, UI
 1. Implement installer-owned Lean/Lake compatibility links, including stale randomized APK-path refresh, and centralize the validated environment in `core-toolchain`/`core-process`; include app-writable `TMPDIR`.
 2. Turn the successful raw Lean LSP lifecycle exchange into automated framing/lifecycle tests, add did-open/diagnostics coverage, and verify graceful plus forced shutdown without orphan processes.
 3. Complete offline, APK-replacement migration, low-storage/interrupted-install, corrupted-facet, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
-4. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, and termination cases.
+4. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, termination, and visual-editor cases.
 5. Run the M1.6 delivery prototypes using the measured 803.7 MB debug APK and approximately 2.18 GB writable sysroot, then select release-channel packaging before expanding into project/editor features.
 6. Close M1 with an ADR for child processes, Bionic heap-tagging behavior, sysroot/layout patches, and the supported process/tool capability boundary.
 
