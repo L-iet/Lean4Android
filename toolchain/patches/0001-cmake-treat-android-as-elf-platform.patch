@@ -55,7 +55,7 @@ diff --git a/src/stdlib.make.in b/src/stdlib.make.in
 index 45feac3183..2025a2ac7e 100644
 --- a/src/stdlib.make.in
 +++ b/src/stdlib.make.in
-@@ -7,8 +7,8 @@ SHELL := $(LEAN_BASH) -eo pipefail
+@@ -7,9 +7,9 @@ SHELL := $(LEAN_BASH) -eo pipefail
  # any absolute path to the stdlib breaks the Makefile
  export LEAN_PATH=
  ifeq "${USE_LAKE}" "ON"
@@ -66,3 +66,4 @@ index 45feac3183..2025a2ac7e 100644
 +  export LEAN_CC=${CMAKE_C_COMPILER_LAUNCHER} ${LEANC_CC}
  endif
  export LEAN_ABORT_ON_PANIC=1
+ 
