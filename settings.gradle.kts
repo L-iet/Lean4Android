@@ -17,6 +17,6 @@ dependencyResolutionManagement {
 rootProject.name = "Lean4Android"
 include(":app")
 include(":core-model")
+include(":core-lsp")
 include(":core-process")
 include(":core-toolchain")
-

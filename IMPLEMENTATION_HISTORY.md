@@ -206,3 +206,16 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 - Restored ADB access to the connected SM-T870/API-33 tablet after its USB node reverted to `root:root` mode `0600`: changed only `/dev/bus/usb/001/002` to `root:plugdev` mode `0660`, restarted the project SDK's ADB with libusb, and confirmed the authorized device.
 - Update-installed the hardening APK with `adb install -r`, preserving the existing approximately 2.18 GB sysroot and project data. The visual editor still renders an enabled multiline source field, Check action, and result panel. Its production Check path atomically saved `Main.lean`, exited 0 in 3,115 ms, and visibly returned the expected theorem type plus `"Hello from Lean on Android"` evaluation.
 - The same Check refreshed all three compatibility links without reinstalling sysroot data. `bin/lean` and `.lake/build/bin/lake` point to the current randomized `/data/app/.../lib/arm64/` executables, while `.lake/build/lib/lean` points to the preserved writable sysroot. Recent filtered logcat contains no app fatal exception, native fatal signal, or Bionic pointer-tagging abort.
+
+## 2026-08-13 — LSP framing and lifecycle foundation
+
+### Implemented
+
+- Added the `core-lsp` Android library as an isolated protocol layer. The visual editor and its proven direct Check path remain unchanged; the app will depend on LSP only after long-lived process ownership is implemented.
+- Added byte-accurate stdio JSON-RPC framing with UTF-8 `Content-Length`, case-insensitive header parsing, bounded headers, exact payload reads, clean EOF handling, synchronized writes, and explicit errors for missing, duplicate, invalid, or truncated frames.
+- Added minimal typed generation for the pinned Lean server lifecycle sequence: `initialize`, `initialized`, `shutdown`, and `exit`, including safe JSON string escaping for workspace URIs.
+
+### Validation
+
+- `:core-lsp:testDebugUnitTest` passes. Tests exercise multibyte Unicode byte counts, two-byte fragmented reads, coalesced messages, EOF, malformed/duplicate/invalid lengths, truncated payloads, lifecycle ordering through the real framing boundary, and URI escaping.
+- This checkpoint proves protocol encoding/framing in isolation. The earlier physical-device raw handshake remains the evidence that the packaged Lean server starts; supervised real-process lifecycle, `didOpen`, diagnostics, version filtering, and orphan-process checks remain the next slice.

@@ -35,6 +35,7 @@ Tracked inputs:
 ```text
 app/                         Android application and APK staging rules
 core-model/                  typed models
+core-lsp/                    LSP JSON-RPC framing and lifecycle messages
 core-process/                shell-free process runner
 core-toolchain/              Android toolchain location/installation
 toolchain/versions.toml      pinned source/build inputs
@@ -201,7 +202,7 @@ Assembly deletes and recreates the output distribution. On `/mnt/d`, copying the
 
 ### 5.1 Gradle modules
 
-The M0 Android project contains `app`, `core-model`, `core-process`, and `core-toolchain`. The application depends on the three libraries and Compose. Unit tests currently cover toolchain IDs/path safety and shell-free process argument behavior.
+The Android project contains `app`, `core-model`, `core-lsp`, `core-process`, and `core-toolchain`. The application currently depends on the model, process, and toolchain libraries plus Compose; `core-lsp` is deliberately isolated until the long-lived server supervisor is implemented. Unit tests cover toolchain IDs/path safety, shell-free process arguments, runtime layout/environment construction, visual-editor support, and byte-accurate LSP framing/lifecycle messages.
 
 ### 5.2 Toolchain staging
 
@@ -500,7 +501,7 @@ On the Samsung SM-T870/API 33 reference tablet:
 - a cold app restart reuses the activated sysroot and completes the production version probe in approximately 2.48 seconds; and
 - filtered logcat shows no app fatal exception, pointer-tagging abort, or native backtrace from the conformance run.
 
-The current manual validation layout uses writable symlinks to the APK-installed Lean/Lake executables. Production code still needs to create and refresh those links automatically and centralize the complete environment. LSP document-open/diagnostics, offline proof, update migration, low-storage/interruption/corruption behavior, RSS/install timing, and the API-level matrix remain M1 work.
+Production code now creates and refreshes writable symlinks to the APK-installed Lean/Lake executables and centralizes direct Lean/Lake environments; an API-33 APK update validated stale native-path repair. `core-lsp` now tests protocol framing and lifecycle message generation in isolation. A long-lived supervisor, real-server lifecycle automation, document-open/diagnostics, offline proof, installer schema/low-storage/interruption/corruption behavior, RSS/install timing, and the API-level matrix remain M1 work.
 
 ## 9. Recovery and operational cautions
 
