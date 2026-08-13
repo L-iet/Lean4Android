@@ -2,7 +2,7 @@
 
 An Android-native Lean 4 code editor and proof-assistant environment. The project is in its initial feasibility phase: the Android shell and toolchain contracts exist, while the Lean Android cross-build is still under construction.
 
-See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the roadmap and [IMPLEMENTATION_HISTORY.md](IMPLEMENTATION_HISTORY.md) for completed work and decisions.
+See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the roadmap, [IMPLEMENTATION_HISTORY.md](IMPLEMENTATION_HISTORY.md) for completed work and decisions, and [MVP_AND_REBUILDING.md](MVP_AND_REBUILDING.md) for build, deployment, and incremental-rebuild procedures.
 
 ## Current prerequisites
 

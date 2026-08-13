@@ -1,7 +1,7 @@
 # Lean4Android implementation plan
 
-Status: proposed roadmap  
-Date: 2026-08-11
+Status: active roadmap; M0 complete, M1 device validation in progress
+Last revised: 2026-08-12
 
 ## 1. Goal and first release boundary
 
@@ -33,8 +33,12 @@ nativeLibraryDir/                 read-only, installed by Android
   required runtime .so files
 
 noBackupFilesDir/toolchains/<id>/ writable data, restored from signed assets
-  lib/lean/                       .olean, .ilean, sources, headers
-  share/
+  bin/lean                        refreshed symlink to APK-installed executable
+  .lake/build/bin/lake            refreshed symlink to APK-installed executable
+  .lake/build/lib/lean            compatibility link to the Lean library
+  lib/lean/                       .olean plus server/private/IR facets and .ilean
+  src/lean/                       sources needed by server/navigation
+  include/, share/, licenses
 
 filesDir/projects/<project-id>/   writable project workspaces
   lakefile.toml
@@ -46,7 +50,15 @@ filesDir/projects/<project-id>/   writable project workspaces
 cacheDir/                         temporary extraction/log files
 ```
 
-The spike must prove that a packaged executable can locate the data sysroot outside its own directory. If Lean or Lake assumes a colocated distribution, patch upstream path discovery or launch with an explicit `LEAN_SYSROOT`; do not duplicate writable executables.
+Device testing has proven that packaged executables can run, but Lean/Lake assume a conventional colocated desktop distribution. The supported adapter is:
+
+- resolve executable targets from `ApplicationInfo.nativeLibraryDir` on every app version;
+- recreate writable symlinks after sysroot activation and after every APK update;
+- make Lean's internal path discovery honor `LEAN_SYSROOT`;
+- launch Lake with `LAKE_HOME`, `LAKE_OVERRIDE_LEAN=true`, and `LEAN_SYSROOT`; and
+- never persist the randomized APK/native-library path or copy executable bytes to writable storage.
+
+The installer is not healthy until both its data marker and executable-layout links validate against the current APK installation.
 
 ### 2.2 Android cross-build
 
@@ -54,10 +66,20 @@ Lean is bootstrapped, so this is not just a normal one-pass CMake cross-compile.
 
 1. a host build that runs the bootstrap compiler and generates C;
 2. an Android `arm64-v8a` target build using the NDK Clang toolchain and Bionic;
-3. assembly of a relocatable Android sysroot containing the target executables, runtime libraries, standard `.olean`/`.ilean` files, sources needed by the server, and licenses; and
+3. assembly of a relocatable Android sysroot containing runtime libraries, all required split Lean module artifacts (`.olean`, `.olean.server`, `.olean.private`, `.ir`, and `.ilean`), sources needed by the server, headers/share data, and licenses; and
 4. device tests that catch accidental glibc, host-architecture, absolute-path, and unavailable-system-command dependencies.
 
 Keep all Lean/NDK patches in a small, reviewable patch series. The intended build should run in CI from clean checkouts and emit a versioned manifest with upstream commit, NDK version, ABI, minimum API, hashes, licenses, and file list.
+
+The current patch set also needs to preserve these validated Android adaptations:
+
+- Android receives Lean's ELF/PIC/dynamic-loader CMake behavior;
+- generated C uses the configured NDK AArch64 API driver;
+- libc++/libc++abi are statically linked without `libc++_shared.so`;
+- Lean disables Bionic heap pointer tagging before runtime initialization; and
+- internal Lean sysroot discovery gives `LEAN_SYSROOT` precedence over executable-relative paths.
+
+The source checkout must exactly match the canonical checked-in patch. Scheduled clean builds must prove that incremental-build success does not conceal undeclared inputs.
 
 ### 2.3 Runtime scope
 
@@ -69,12 +91,17 @@ Prove these independently, in this order:
 - Lake can read a local project and run `lake lean Main.lean` and `lake build` without network access.
 - cancellation terminates the server and all child processes.
 - the same operations work after a cold restart and with paths containing spaces and non-ASCII characters.
+- app update refreshes all executable-layout symlinks after Android changes the randomized native-library path;
+- first install, interrupted install, low-storage recovery, and corrupted split module artifacts fail atomically and readably; and
+- the process environment works without a shell, inherited host variables, or network access.
 
 `lake build` may invoke a C compiler for executable or native targets. Treat proof checking and Lean library builds as the MVP. Shipping an NDK-based `leanc` workflow is a separate capability and must not block editor/LSP delivery.
 
 ### 2.4 Feasibility exit criteria
 
-Continue to the product build only when a test APK passes the above checks on the oldest supported API and a current Android release, remains functional offline, and records peak RSS, cold-start time, first-diagnostic latency, and installed size. Initial targets are API 29+, arm64 only, under 3 seconds for first diagnostics on a small Std-only file on the reference phone, and no orphaned Lean processes after cancellation. Performance numbers are budgets to measure and revise, not promises.
+Continue to the product build only when a test APK passes the above checks on the oldest supported API and a current Android release, remains functional offline, and records peak RSS, cold-start time, first-diagnostic latency, APK/download size, installed native size, writable-sysroot size, first-install time, and update time. Initial targets are API 29+, arm64 only, under 3 seconds for first diagnostics on a small Std-only file on the reference device, and no orphaned Lean processes after cancellation. Performance numbers are budgets to measure and revise, not promises.
+
+The current full Lean 4.32 runtime sysroot is approximately 2,175,501 KiB on-device because ordinary imports require server/private/IR facets. This makes distribution feasibility a separate exit gate: select and validate an asset-delivery strategy before treating a monolithic debug APK as the release architecture.
 
 If child execution from the installed native directory proves unreliable across supported devices, stop and write an architecture decision record comparing: (a) a small native launcher, and (b) embedding Lean behind a narrow JNI boundary. Do not build the IDE UI around an unproven process model.
 
@@ -127,7 +154,8 @@ If CodeMirror wins, keep the bridge small and typed. JavaScript sends document e
 Implement one component as the only way to start native tools. It must:
 
 - use absolute executable and working-directory paths;
-- construct a minimal deterministic environment (`LEAN_SYSROOT`, `LAKE_HOME`, `LEAN_PATH`, `PATH`, and library search path only where needed);
+- construct a minimal deterministic environment (`HOME`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, and the native library search path; plus `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true` for Lake);
+- derive all executable targets from current Android application metadata and validate/refresh sysroot compatibility links before launch;
 - stream stdout/stderr concurrently to avoid deadlock;
 - support timeouts, explicit cancellation, process-tree cleanup, and one LSP server per open project;
 - serialize mutating Lake operations per project while allowing safe reads;
@@ -135,6 +163,8 @@ Implement one component as the only way to start native tools. It must:
 - redact app-private absolute paths from exported logs.
 
 No command is assembled through a shell. Arguments are always a list, and user text is never interpreted as a command.
+
+Add a typed `ToolchainEnvironment`/`ToolchainCommandFactory` rather than constructing environment maps in UI code. It must distinguish direct Lean, Lake, and LSP commands, include capability flags for unsupported native-build tools, and expose redacted diagnostics for layout failures.
 
 ### 3.3 LSP client
 
@@ -171,7 +201,22 @@ Ship exactly one supported Lean version initially. Give each toolchain an immuta
 
 Do not ship Elan in v1. Automatic arbitrary toolchain installation conflicts with Android's executable-code restrictions and makes reproducibility and support much harder.
 
-### 4.2 Offline dependency policy
+An immutable toolchain ID identifies data format and Lean revision, but its executable symlinks are mutable installation metadata because APK paths change. Activation therefore consists of immutable verified data plus an idempotent link-refresh step. The installation marker must include enough schema/version information to rerun layout migration safely.
+
+### 4.2 Core toolchain delivery and footprint
+
+Do not assume the core/Std data fits comfortably in the base APK. Measure three representations independently: source distribution, filtered uncompressed runtime, and compressed delivery artifact. The current required runtime includes large `.olean.private` and `.ir` sets and is over 2 GB installed.
+
+Evaluate, in order:
+
+1. Android App Bundle/on-demand asset delivery for Play-compatible builds;
+2. a separately downloaded or user-imported signed core data pack for independent/F-Droid builds;
+3. compression/container formats that support streaming installation and per-file hash verification without peak disk usage near twice the installed size; and
+4. a deliberately rebuilt flattened/minimal Lean distribution only if it preserves checking, interpretation, LSP, navigation, and Lake semantics.
+
+The base APK must continue to contain executable native code. Downloaded packs contain data only. Installation must preflight free space, stream into staging, validate every manifest entry, atomically activate, and clean recoverably after interruption.
+
+### 4.3 Offline dependency policy
 
 The initial product supports:
 
@@ -181,9 +226,9 @@ The initial product supports:
 
 Network-based `lake update`, arbitrary Git dependencies, post-install native plugins, and packages with external build scripts are explicitly unsupported at first. Lake can depend on tools such as Git, tar, and curl for those workflows, and arbitrary packages may execute build logic. Add them only with a security model and explicit UI.
 
-### 4.3 Mathlib pack
+### 4.4 Mathlib pack
 
-Build Mathlib in CI against the exact Android Lean toolchain. A pack contains a signed manifest, licenses, source files needed for navigation, `.olean` and `.ilean` artifacts, and any proven-compatible runtime data. Test `import Mathlib`, goals, hover, definition navigation, and a representative tactic suite on a physical device.
+Build Mathlib in CI against the exact Android Lean toolchain. A pack contains a signed manifest, licenses, source files needed for navigation, and every split module facet empirically required by checking/server workflows—not merely `.olean`/`.ilean`. Test `import Mathlib`, goals, hover, definition navigation, interpretation where supported, and a representative tactic suite on a physical device.
 
 Distribute Mathlib separately because of size. Support two channels behind one installer abstraction:
 
@@ -202,20 +247,44 @@ Install into a staging directory, verify signature/hash/version/free-space, then
 
 Exit: clean CI builds an APK and records reproducible inputs.
 
-### M1 — Android Lean feasibility spike (2–6 weeks; highest uncertainty)
+### M1 — Android Lean runtime feasibility (in progress; highest uncertainty)
 
 - Produce the arm64 Android Lean runtime/toolchain.
 - Package executable code in the APK-native location and data in a versioned sysroot.
-- Build the process supervisor test screen.
-- Pass all checks in section 2.3 on physical devices and publish measurements.
+- Maintain the canonical Android patch and complete clean-build reproducibility.
+- Pass version and valid/invalid file checks through the production process boundary.
+- Complete Lake child-process path validation, LSP initialization/diagnostics, cancellation, cold-restart, Unicode-path, offline, and API-level probes.
+- Publish native, sysroot, memory, startup, and latency measurements.
 
-Exit: a fresh offline install checks valid/invalid Lean files and completes an LSP handshake. If this fails, decide on launcher/JNI before continuing.
+Exit: a fresh offline install checks valid/invalid Lean files, builds a local Lean library with Lake, completes an LSP handshake, and leaves no orphan processes. The child-process architecture is retained unless the remaining matrix exposes an execution defect.
 
-### M2 — Project runner (2 weeks)
+### M1.5 — Runtime layout and upgrade hardening
 
-- Add toolchain installer/health check and project templates.
+- Move all environment construction into a typed `ToolchainEnvironment` and command factory.
+- Extend the installer to validate all required module facets and create/refresh Lean/Lake compatibility symlinks.
+- Detect APK/native-directory changes independently of immutable sysroot data installation.
+- Add installation-schema migration, interrupted-install cleanup, free-space preflight, corruption reporting, and cold-update tests.
+- Record an ADR for the child-process decision, Bionic heap-tagging compromise, and upstream patch maintenance.
+
+Exit: install, restart, APK replacement, and interrupted migration tests all recover automatically; no UI code constructs native command paths or environments.
+
+### M1.6 — Core toolchain delivery spike
+
+- Measure compressed APK/AAB size and installed footprint with all required split module facets.
+- Prototype Play asset delivery and an independent signed data-pack installer behind one interface.
+- Prototype streaming extraction/hash validation and quantify peak temporary disk usage and install duration.
+- Investigate a smaller Lean artifact build only as an optimization experiment, with the complete conformance/LSP suite as the correctness gate.
+- Decide base-APK versus asset-pack contents and document store/repository limits.
+
+Exit: at least one viable Play path and one viable independent-distribution path install the full core toolchain within documented storage/time budgets. If neither is viable, revisit the supported Lean artifact model before product UI work.
+
+### M2 — Project runner and durable process service
+
+- Add project templates and version compatibility checks on top of the hardened toolchain installer.
 - Implement create/list/open, atomic save, `lake lean`, and supported `lake build`.
-- Add structured job output, cancellation, error states, and basic import/export.
+- Add structured job output, cancellation/process-tree cleanup, error states, and basic import/export.
+- Put long-running process ownership in a reconnectable bound/foreground service.
+- Explicitly reject unsupported Git/network/native-target workflows before Lake attempts them.
 
 Exit: an instrumentation test creates a two-module project, catches an error, fixes it, builds it, exports it, deletes it, and reimports it offline.
 
@@ -232,6 +301,7 @@ Exit: a user can edit the two-module sample without losing changes across rotati
 - Implement LSP lifecycle, document sync, live diagnostics, hover, completion, and go-to-definition.
 - Add a cursor-synchronized goals/messages pane using the pinned Lean server protocol.
 - Add crash recovery, stale-response handling, progress, and server restart controls.
+- Validate server behavior with the full split-artifact runtime and measure its peak RSS separately from one-shot checking.
 
 Exit: automated protocol tests plus a device scenario demonstrate correct diagnostics/goals during rapid edits, save, file switch, and server restart.
 
@@ -249,6 +319,7 @@ Exit: representative Mathlib files work offline without process death, and the d
 - Run compatibility, soak, cancellation, corruption, low-storage, and process-death tests.
 - Add crash reporting with opt-in/privacy controls, onboarding, licenses, backup policy, and a support bundle exporter.
 - Publish known limitations and supported Lean/package versions.
+- Test API 29 and current Android, multi-user/profile behavior, APK path migration, USB-independent production flows, and all supported delivery channels.
 
 Exit: signed beta passes the release test matrix with no critical data-loss, sandbox-escape, startup, or orphan-process bugs.
 
@@ -266,6 +337,9 @@ Exit: signed beta passes the release test matrix with no critical data-loss, san
 ### Android integration tests
 
 - native executable discovery and ABI/API compatibility;
+- split-artifact completeness and installer hash verification;
+- compatibility-link creation, stale APK-path repair, and update migration;
+- deterministic Lean/Lake environment construction without inherited shell state;
 - stdin/stdout/stderr backpressure and cancellation;
 - LSP initialize/edit/diagnostics/shutdown transcripts;
 - cold install, upgrade, corrupted toolchain, and interrupted pack install;
@@ -276,6 +350,8 @@ Exit: signed beta passes the release test matrix with no critical data-loss, san
 
 Maintain a small corpus containing successful proofs, syntax/type errors, multi-module imports, Unicode identifiers, macros, tactics, `#check`, and `#eval`. Run it on desktop Lean and Android Lean and compare normalized outcomes. Add Mathlib cases only to the Mathlib lane.
 
+The corpus must separately exercise direct Lean, `lake lean`, `lake build`, and `lake serve`. At least one case must require interpretation/IR, one must depend on server/private module data, and one must use a path containing spaces and non-ASCII characters so future size filtering cannot silently remove required facets.
+
 CI should build and unit-test every change, build the pinned toolchain from scratch on scheduled/release jobs, run emulator smoke tests, and gate releases on physical-device tests. Sanitizer builds may run on host even when unavailable in the Android production configuration.
 
 ## 7. Risks and explicit mitigations
@@ -284,10 +360,15 @@ CI should build and unit-test every change, build the pinned toolchain from scra
 |---|---|---|
 | Lean bootstrap or runtime assumes desktop Unix | No viable binary | M1 first; isolate patches and upstream them where possible |
 | Android executable restrictions | Process launch fails on modern devices | Execute only APK-installed code; physical API-level matrix; JNI fallback ADR |
+| APK reinstall changes native executable paths | Lake links become stale after every update | Never persist APK path as toolchain identity; refresh validated symlinks on startup/update |
+| Lean strips Bionic heap pointer tags | Deterministic native abort during initialization | Android-only early runtime `mallopt`; conformance tests on every supported API/device |
+| Lean split artifacts exceed 2 GB installed | Base APK/store/install strategy is infeasible | M1.6 delivery gate; data-only asset packs; streaming verified install; investigate flattened artifacts |
+| Missing `.olean.server`, `.olean.private`, or `.ir` | Imports fail despite apparently healthy `.olean` | Manifest declares required facet set; installer and health check verify representative and complete hashes |
+| Lean/Lake executable-relative path inference | Standard library or Lake installation is not found | `LEAN_SYSROOT` patch, typed environment, conventional-layout symlinks, upgrade tests |
 | Lean/Lake invokes missing Unix tools | Builds or dependencies fail | Constrain v1 commands; audit subprocesses; expose capabilities, not a terminal |
 | LSP/Mathlib exceeds mobile memory | OS kills server or UI stalls | Measure RSS early; one server/project; bounded caches; explicit server stop |
 | Toolchain/Mathlib version mismatch | Invalid artifacts or confusing errors | Immutable version IDs and signed compatibility manifests |
-| Package size is too large | Store/install failure | Separate data packs, ABI splits/AAB, measure compressed and installed sizes |
+| Package size is too large | Store/install failure | Core delivery spike before UI expansion; separate data packs, AAB/asset delivery, measure compressed/installed/peak temporary sizes |
 | Arbitrary package build logic | Security and compatibility issues | Offline allowlisted packs first; no downloaded executable/native plugins |
 | Editor bridge compromises files | Project/data exposure | Bundled content only, narrow typed bridge, disabled navigation/file access |
 | App update or crash loses work | User data loss | Atomic saves, recovery snapshots, migration rollback, import/export tests |
@@ -308,11 +389,13 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Choose and record a pinned Lean release, NDK release, minimum/target API, Kotlin/AGP versions, application ID, and reference arm64 devices.
-2. Create `toolchain/README.md`, the build container, manifest schema, and a tiny conformance corpus.
-3. Map Lean's host/target bootstrap steps and enumerate every target ELF dependency with `readelf` in CI.
-4. Build the M1 test APK that launches from `nativeLibraryDir`, with no editor work yet.
-5. Capture success/failure and measurements in an ADR; only then scaffold the full project/editor modules.
+1. Finish the active `LEAN_SYSROOT` rebuild, reassemble/audit the distribution, and prove `lake lean` plus `lake build` on the physical device.
+2. Implement installer-owned Lean/Lake compatibility links and centralize the validated environment in `core-toolchain`/`core-process`.
+3. Complete raw Lean/Lake LSP initialize, diagnostics, shutdown, and forced-cancellation probes; check for orphan processes.
+4. Run cold restart, APK replacement, Unicode/space path, offline, low-storage/interruption, and timing/RSS measurements on the API-33 reference tablet.
+5. Rebuild the APK with all required split artifacts and measure compressed APK, installed native payload, writable sysroot, installation time, and peak free-space demand.
+6. Run the M1.6 delivery prototypes and select release-channel packaging before expanding into project/editor features.
+7. Add API-29 and current-Android physical/emulator coverage, then close M1 with an ADR and published conformance results.
 
 ## 10. Reference material
 
@@ -322,4 +405,3 @@ These are valuable, but each expands the executable-code, package-management, UI
 - [Lake command-line, environment, build, and language-server documentation](https://lean-lang.org/doc/reference/latest/Build-Tools-and-Distribution/Lake/)
 - [Lean server protocol overview](https://lean-lang.org/doc/api/Lean/Server/ProtocolOverview.html)
 - [Android App Bundle format and asset packs](https://developer.android.com/guide/app-bundle/app-bundle-format)
-
