@@ -17,6 +17,7 @@ cmake -S "$LEAN_SOURCE/src" -B "$ANDROID_BUILD" -G "Unix Makefiles" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM="android-$MINIMUM_API" \
   -DANDROID_STL=c++_static \
+  -DLEANC_CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android${MINIMUM_API}-clang" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH="$ANDROID_DEPS" \
   -DOPENSSL_ROOT_DIR="$ANDROID_DEPS" \

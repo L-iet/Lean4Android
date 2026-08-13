@@ -38,3 +38,31 @@ index 23cb5cd8c9..b74335033f 100644
    add_subdirectory(../tests "${CMAKE_CURRENT_BINARY_DIR}/tests")
  endif()
  
+diff --git a/src/bin/leanc.in b/src/bin/leanc.in
+index 3307553435..a6f7c466e0 100755
+--- a/src/bin/leanc.in
++++ b/src/bin/leanc.in
+@@ -7,7 +7,7 @@ for arg in "$@"; do
+     [[ "$arg" = "-c" ]] && ldflags=()
+     [[ "$arg" = "-v" ]] && v=1
+ done
+-cmd=(${LEAN_CC:-@CMAKE_C_COMPILER@} "-I$root/include" @LEANC_EXTRA_CC_FLAGS@ @LEANC_INTERNAL_FLAGS@ "$@" "${ldflags[@]}" -Wno-unused-command-line-argument)
++cmd=(${LEAN_CC:-@LEANC_CC@} "-I$root/include" @LEANC_EXTRA_CC_FLAGS@ @LEANC_INTERNAL_FLAGS@ "$@" "${ldflags[@]}" -Wno-unused-command-line-argument)
+ cmd=$(printf '%q ' "${cmd[@]}" | sed "s!ROOT!$root!g")
+ [[ $v == 1 ]] && echo $cmd
+ eval $cmd
+diff --git a/src/stdlib.make.in b/src/stdlib.make.in
+index 45feac3183..2025a2ac7e 100644
+--- a/src/stdlib.make.in
++++ b/src/stdlib.make.in
+@@ -7,8 +7,8 @@ SHELL := $(LEAN_BASH) -eo pipefail
+ # any absolute path to the stdlib breaks the Makefile
+ export LEAN_PATH=
+ ifeq "${USE_LAKE}" "ON"
+-  export LEAN_CC=${CMAKE_C_COMPILER}
++  export LEAN_CC=${LEANC_CC}
+ else
+-  export LEAN_CC=${CMAKE_C_COMPILER_LAUNCHER} ${CMAKE_C_COMPILER}
++  export LEAN_CC=${CMAKE_C_COMPILER_LAUNCHER} ${LEANC_CC}
+ endif
+ export LEAN_ABORT_ON_PANIC=1
