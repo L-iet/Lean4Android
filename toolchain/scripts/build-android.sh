@@ -29,7 +29,7 @@ cmake -S "$LEAN_SOURCE/src" -B "$ANDROID_BUILD" -G "Unix Makefiles" \
   -DPREV_STAGE="$HOST_BUILD/stage0" \
   -DPREV_STAGE_CMAKE_EXECUTABLE_SUFFIX= \
   -DLEAN_PLATFORM_TARGET=aarch64-linux-android \
-  -DLEAN_CXX_STDLIB=-lc++_static \
+  -DLEAN_CXX_STDLIB=-lc++ \
   -DUSE_GMP=OFF \
   -DUSE_MIMALLOC=OFF \
   -DUSE_LAKE=OFF \
