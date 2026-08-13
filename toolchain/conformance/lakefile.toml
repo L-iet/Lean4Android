@@ -1,0 +1,8 @@
+name = "lean4android_conformance"
+version = "0.1.0"
+defaultTargets = ["Conformance"]
+
+[[lean_lib]]
+name = "Conformance"
+srcDir = "."
+roots = ["Valid"]

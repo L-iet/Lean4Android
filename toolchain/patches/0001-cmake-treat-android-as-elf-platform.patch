@@ -38,6 +38,19 @@ index 23cb5cd8c9..b74335033f 100644
    add_subdirectory(../tests "${CMAKE_CURRENT_BINARY_DIR}/tests")
  endif()
  
+diff --git a/src/Lean/Util/Path.lean b/src/Lean/Util/Path.lean
+index 09c0253b70..874438fc3e 100644
+--- a/src/Lean/Util/Path.lean
++++ b/src/Lean/Util/Path.lean
+@@ -83,6 +83,8 @@ end SearchPath
+ builtin_initialize searchPathRef : IO.Ref SearchPath ← IO.mkRef {}
+ 
+ def getBuildDir : IO FilePath := do
++  if let some root ← IO.getEnv "LEAN_SYSROOT" then
++    return root
+   return (← IO.appDir).parent |>.get!
+ 
+ def getLibDir (leanSysroot : FilePath) : IO FilePath := do
 diff --git a/src/bin/leanc.in b/src/bin/leanc.in
 index 3307553435..a6f7c466e0 100755
 --- a/src/bin/leanc.in
