@@ -16,10 +16,10 @@ data class ToolchainLayout(
     val sysroot: File,
 ) {
     val leanLibraryDirectory: File get() = sysroot.resolve("lib/lean")
+    val timezoneFile: File get() = sysroot.resolve("share/lean4android/UTC")
 }
 
 sealed interface ToolchainHealth {
     data class Ready(val layout: ToolchainLayout) : ToolchainHealth
     data class Missing(val problems: List<String>) : ToolchainHealth
 }
-

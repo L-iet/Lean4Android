@@ -38,10 +38,17 @@ class ToolchainCommandFactory(
         timeout = timeout,
     )
 
+    fun lakeServer(workingDirectory: File) = lake(
+        arguments = listOf("serve"),
+        workingDirectory = workingDirectory,
+        timeout = Duration.INFINITE,
+    )
+
     private fun commonEnvironment() = mapOf(
         "HOME" to appHome.path,
         "TMPDIR" to temporaryDirectory.path,
         "LEAN_SYSROOT" to layout.sysroot.path,
+        "TZ" to ":${layout.timezoneFile.path}",
         "LD_LIBRARY_PATH" to layout.leanExecutable.parentFile!!.path,
         "PATH" to "/system/bin",
     )

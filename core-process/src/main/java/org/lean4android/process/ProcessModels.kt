@@ -1,6 +1,8 @@
 package org.lean4android.process
 
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -29,3 +31,15 @@ fun interface CommandRunner {
     suspend fun run(command: ProcessCommand): ProcessResult
 }
 
+interface RunningProcess : AutoCloseable {
+    val standardInput: OutputStream
+    val standardOutput: InputStream
+    val standardError: InputStream
+    val isAlive: Boolean
+    fun awaitExit(timeout: Duration): Int?
+    fun terminate(gracePeriod: Duration = 2.seconds): Int
+}
+
+fun interface ProcessLauncher {
+    fun start(command: ProcessCommand): RunningProcess
+}

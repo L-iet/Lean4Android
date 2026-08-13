@@ -26,6 +26,7 @@ class ToolchainLayoutAdapterTest {
         ToolchainLayoutAdapter.refresh(layout)
 
         assertTrue(ToolchainLayoutAdapter.problems(layout).isEmpty())
+        assertTrue(layout.timezoneFile.readBytes().copyOfRange(0, 4).contentEquals("TZif".toByteArray()))
         assertEquals(lean.toPath(), Files.readSymbolicLink(sysroot.resolve("bin/lean").toPath()))
 
         val replacement = root.resolve("installed/native-v2/liblean_exe.so")

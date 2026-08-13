@@ -27,6 +27,7 @@ class LeanLspLifecycleTest {
         assertTrue(decoded[0].contains("space and λ"))
         assertTrue(decoded[2].contains("\"method\":\"shutdown\""))
         assertTrue(decoded[3].contains("\"method\":\"exit\""))
+        assertTrue(decoded[1].contains("\"params\":null"))
     }
 
     @Test

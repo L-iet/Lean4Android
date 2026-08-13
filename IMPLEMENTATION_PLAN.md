@@ -157,6 +157,7 @@ Implement one component as the only way to start native tools. It must:
 
 - use absolute executable and working-directory paths;
 - construct a minimal deterministic environment (`HOME`, app-writable `TMPDIR`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, and the native library search path; plus `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true` for Lake);
+- provide an app-owned TZif fallback and set `TZ` explicitly because Android lacks `/etc/localtime`, which Lean Server requires after `initialized`;
 - derive all executable targets from current Android application metadata and validate/refresh sysroot compatibility links before launch;
 - stream stdout/stderr concurrently to avoid deadlock;
 - support timeouts, explicit cancellation, process-tree cleanup, and one LSP server per open project;
@@ -395,7 +396,7 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Connect the tested JSON-RPC framing/lifecycle messages to a long-lived Lean server supervisor; automate a real initialize/initialized/shutdown/exit exchange, then add did-open/version-filtered diagnostics and verify graceful plus forced shutdown without orphan processes.
+1. Connect the tested framing/document-version layer to app-owned long-lived server state; retain the passing automated `lake serve` initialize/registration/did-open/diagnostics/shutdown/exit and forced-cleanup device cases.
 2. Complete installer schema/marker validation, interrupted-install cleanup, free-space preflight, corrupted-facet reporting, offline/APK-replacement migration, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
 3. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, termination, and visual-editor cases.
 4. Run the M1.6 delivery prototypes using the measured 803.7 MB debug APK and approximately 2.18 GB writable sysroot, then select release-channel packaging before expanding into project/editor features.

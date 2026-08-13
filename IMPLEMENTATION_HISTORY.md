@@ -219,3 +219,20 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 
 - `:core-lsp:testDebugUnitTest` passes. Tests exercise multibyte Unicode byte counts, two-byte fragmented reads, coalesced messages, EOF, malformed/duplicate/invalid lengths, truncated payloads, lifecycle ordering through the real framing boundary, and URI escaping.
 - This checkpoint proves protocol encoding/framing in isolation. The earlier physical-device raw handshake remains the evidence that the packaged Lean server starts; supervised real-process lifecycle, `didOpen`, diagnostics, version filtering, and orphan-process checks remain the next slice.
+
+## 2026-08-13 — Real Lean diagnostics and process lifecycle
+
+### Implemented
+
+- Added a shell-free interactive `JvmProcessLauncher`/`RunningProcess` boundary with independently owned stdin/stdout/stderr, bounded exit waiting, graceful termination, and forced direct-child fallback. Added a dedicated `ToolchainCommandFactory.lakeServer()` command using workspace-aware `lake serve`.
+- Added Lean `didOpen`, full-text `didChange`, and `didClose` message generation plus a synchronized document-version gate that rejects stale, closed, and unknown-document diagnostics.
+- Added `toolchain/conformance/run-device-lsp.py`, a repeatable non-PTY ADB conformance client. It creates a private local Lake project, performs initialize and dynamic-registration exchange, opens invalid Lean source, waits for versioned nonempty diagnostics, and completes shutdown/exit. It also has a forced-stop mode and checks for remaining Lean/Lake process names.
+- Added an installer-owned 114-byte UTC TZif fallback and explicit `TZ=:/.../UTC` in the centralized toolchain environment.
+
+### Findings and validation
+
+- The previously reported `/etc/localtime` watchdog message was not harmless for a usable LSP session. Initialization returns capabilities, but after `initialized` Lean starts its client task, fails to resolve Android's absent `/etc/localtime`, and exits 1 before document diagnostics. Android's tzdata APEX exposes a packed database rather than individual TZif files, so it is not a compatible direct replacement.
+- With the app-owned UTC TZif, the intended `lake serve` path returns Lean Server 0.3.0 capabilities, requests file-watcher registration, accepts a version-1 `didOpen`, publishes the expected `rfl` error for `1 + 1 = 3`, acknowledges shutdown, and exits 0. A separate forced-transport-stop run after initialization reports zero remaining `lean`, `lake`, `liblean_exe.so`, or `liblake_exe.so` processes.
+- Added unit coverage for interactive stream separation, environment clearing, bounded/forced direct-child termination, `lake serve` command construction, pinned Lean's `initialized: null`, document message escaping, monotonic versions, and stale/closed diagnostic rejection. All affected model/process/toolchain/LSP unit suites pass.
+- The full `testDebugUnitTest :app:assembleDebug` regression passes in 3m42s. After deleting only the manually staged UTC diagnostic fixture, update-installing the new APK, and running Check, production `ToolchainLayoutAdapter` recreated a 114-byte `TZif` fallback. The visual editor still exited 0 with the expected `#check`/`#eval` output in 2,911 ms.
+- Repeated both automated device modes using the production-created fallback: workspace-aware `lake serve` produced the expected version-1 diagnostic and exited 0 through shutdown/exit; forced transport termination reported no remaining Lean/Lake processes.
