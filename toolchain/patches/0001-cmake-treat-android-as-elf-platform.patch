@@ -51,6 +51,28 @@ index 3307553435..a6f7c466e0 100755
  cmd=$(printf '%q ' "${cmd[@]}" | sed "s!ROOT!$root!g")
  [[ $v == 1 ]] && echo $cmd
  eval $cmd
+diff --git a/src/runtime/init_module.cpp b/src/runtime/init_module.cpp
+index 9ae9afb763..e981d9a3ff 100644
+--- a/src/runtime/init_module.cpp
++++ b/src/runtime/init_module.cpp
+@@ -14,9 +14,17 @@ Author: Leonardo de Moura
+ #include "runtime/mutex.h"
+ #include "runtime/init_module.h"
+ #include "runtime/libuv.h"
++#ifdef __ANDROID__
++#include <malloc.h>
++#endif
+ 
+ namespace lean {
+ extern "C" LEAN_EXPORT void lean_initialize_runtime_module() {
++#ifdef __ANDROID__
++    // Lean stores metadata in pointer bits, which does not preserve Bionic's
++    // top-byte heap tags when the pointer is later passed to free().
++    (void)mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
++#endif
+     initialize_alloc();
+     initialize_debug();
+     initialize_object();
 diff --git a/src/stdlib.make.in b/src/stdlib.make.in
 index 45feac3183..2025a2ac7e 100644
 --- a/src/stdlib.make.in
