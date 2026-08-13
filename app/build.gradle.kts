@@ -4,6 +4,33 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val toolchainDistribution = rootProject.layout.projectDirectory.dir(
+    "toolchain/output/lean-4.32.1-android1",
+)
+val generatedToolchain = layout.buildDirectory.dir("generated/toolchain")
+
+val stageToolchainNative by tasks.registering(Sync::class) {
+    from(toolchainDistribution.dir("native"))
+    into(generatedToolchain.map { it.dir("jniLibs") })
+}
+
+val stageToolchainSysroot by tasks.registering(Sync::class) {
+    from(toolchainDistribution.dir("sysroot")) {
+        exclude(
+            "**/*.a",
+            "**/*.export",
+            "**/*.ir",
+            "**/*.olean.private",
+            "**/*.olean.server",
+            "**/*.o",
+            "**/*.c",
+            "**/*.depend",
+            "**/*.so",
+        )
+    }
+    into(generatedToolchain.map { it.dir("assets/toolchain") })
+}
+
 android {
     namespace = "org.lean4android.app"
     compileSdk = 36
@@ -33,8 +60,18 @@ android {
 
     packaging {
         jniLibs.useLegacyPackaging = true
+        jniLibs.keepDebugSymbols += "**/*.so"
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
+    sourceSets.named("main") {
+        jniLibs.srcDir(generatedToolchain.map { it.dir("jniLibs") })
+        assets.srcDir(generatedToolchain.map { it.dir("assets") })
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(stageToolchainNative, stageToolchainSysroot)
 }
 
 kotlin {

@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.lean4android.toolchain.AndroidToolchainLocator
+import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,7 +29,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 ToolchainProbeScreen(
-                    probe = { AndroidToolchainLocator(applicationContext).probe() },
+                    probe = { update ->
+                        thread(name = "lean-toolchain-install") {
+                            val locator = AndroidToolchainLocator(applicationContext)
+                            val report = runCatching {
+                                locator.installSysroot()
+                                locator.probe()
+                            }.getOrElse { "Toolchain installation failed: ${it.message}" }
+                            runOnUiThread { update(report) }
+                        }
+                    },
                 )
             }
         }
@@ -37,7 +47,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun ToolchainProbeScreen(probe: () -> String) {
+private fun ToolchainProbeScreen(probe: ((String) -> Unit) -> Unit) {
     var report by remember { mutableStateOf("Toolchain has not been probed.") }
 
     Scaffold(
@@ -52,8 +62,11 @@ private fun ToolchainProbeScreen(probe: () -> String) {
         ) {
             Text("M1 feasibility probe", style = MaterialTheme.typography.headlineSmall)
             Text(report, style = MaterialTheme.typography.bodyMedium)
-            Button(onClick = { report = probe() }) {
-                Text("Inspect packaged toolchain")
+            Button(onClick = {
+                report = "Installing and checking packaged toolchain…"
+                probe { report = it }
+            }) {
+                Text("Install and inspect toolchain")
             }
         }
     }
