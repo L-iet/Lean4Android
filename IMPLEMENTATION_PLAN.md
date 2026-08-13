@@ -267,8 +267,9 @@ Exit: a fresh offline install checks valid/invalid Lean files, builds a local Le
 - [x] Move all environment construction into a typed command factory.
 - [x] Create/refresh Lean/Lake compatibility symlinks and reject absent/stale links in health checks.
 - [x] Detect and repair APK/native-directory changes independently of immutable sysroot data installation; validated by update-install on the API-33 reference tablet.
-- Extend the installer to validate all required module facets.
-- Add installation-schema migration, interrupted-install cleanup, free-space preflight, corruption reporting, and cold-update tests.
+- [x] Add a schema/toolchain-aware marker, in-place legacy-marker migration, representative required-facet validation, staging cleanup, rollback recovery, and a conservative free-space preflight.
+- Extend representative facet checks to a complete packaged manifest/hash validation pass.
+- Add instrumented interrupted-activation, low-storage, complete corruption, and cold-update tests.
 - Record an ADR for the child-process decision, Bionic heap-tagging compromise, and upstream patch maintenance.
 
 Exit: install, restart, APK replacement, and interrupted migration tests all recover automatically; no UI code constructs native command paths or environments.
@@ -397,7 +398,7 @@ These are valuable, but each expands the executable-code, package-management, UI
 ## 9. Immediate next actions
 
 1. Connect the tested framing/document-version layer to app-owned long-lived server state; retain the passing automated `lake serve` initialize/registration/did-open/diagnostics/shutdown/exit and forced-cleanup device cases.
-2. Complete installer schema/marker validation, interrupted-install cleanup, free-space preflight, corrupted-facet reporting, offline/APK-replacement migration, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
+2. Add a complete filtered-runtime manifest/hash verifier, then instrument interrupted activation, low-storage, corruption repair, cold update, offline behavior, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
 3. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, termination, and visual-editor cases.
 4. Run the M1.6 delivery prototypes using the measured 803.7 MB debug APK and approximately 2.18 GB writable sysroot, then select release-channel packaging before expanding into project/editor features.
 5. Close M1 with an ADR for child processes, Bionic heap-tagging behavior, sysroot/layout patches, and the supported process/tool capability boundary.

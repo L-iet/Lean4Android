@@ -236,3 +236,18 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 - Added unit coverage for interactive stream separation, environment clearing, bounded/forced direct-child termination, `lake serve` command construction, pinned Lean's `initialized: null`, document message escaping, monotonic versions, and stale/closed diagnostic rejection. All affected model/process/toolchain/LSP unit suites pass.
 - The full `testDebugUnitTest :app:assembleDebug` regression passes in 3m42s. After deleting only the manually staged UTC diagnostic fixture, update-installing the new APK, and running Check, production `ToolchainLayoutAdapter` recreated a 114-byte `TZif` fallback. The visual editor still exited 0 with the expected `#check`/`#eval` output in 2,911 ms.
 - Repeated both automated device modes using the production-created fallback: workspace-aware `lake serve` produced the expected version-1 diagnostic and exited 0 through shutdown/exit; forced transport termination reported no remaining Lean/Lake processes.
+
+## 2026-08-13 — Installer schema and representative integrity hardening
+
+### Implemented
+
+- Replaced the presence-only `.installed` marker contract with schema version 1 plus the immutable toolchain ID. Existing ID-only markers migrate atomically in place only when representative runtime facets are complete, avoiding an unnecessary 2.19 GB reinstall on upgrade.
+- Installation health now requires nonempty `Init.olean`, `.olean.private`, `.olean.server`, `.ilean`, and `.ir` files as well as a matching marker, native executables, compatibility links, Lean library, and UTC fallback.
+- The installer always removes stale `.installing` state, can restore a healthy `.previous` tree left by interrupted activation, validates staged facets before replacing the active tree, and preserves the former active tree until the staged rename succeeds.
+- Added a free-space preflight using the measured 2,194,903,155-byte filtered sysroot plus a 64 MiB reserve. The size constant is documented beside its Gradle build field and must be updated whenever APK filtering changes.
+
+### Validation
+
+- Added unit tests for healthy schema markers, safe legacy migration, wrong schema/ID reporting, empty/missing split facets, and the exact free-space threshold. `:core-toolchain:testDebugUnitTest :app:compileDebugKotlin` passes.
+- Complete per-file manifest/hash validation, injected rename interruption, actual low-storage behavior, and corrupted-device repair remain explicitly open; representative facet validation is not being treated as complete corruption coverage.
+- The full `testDebugUnitTest :app:assembleDebug` regression passes in 4m38s. Update-installed it over the reference tablet's legacy ID-only marker and invoked migration through the visual Check path. The marker changed in place to `schema=1` plus the matching toolchain ID, the existing 2,175,531 KiB sysroot was retained, no `.installing` or `.previous` tree remained, and Lean exited 0 with expected output in 3,212 ms.

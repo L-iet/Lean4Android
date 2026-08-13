@@ -322,6 +322,8 @@ Lake expects conventional paths. The installer/locator must provide links concep
 
 `AndroidToolchainLocator.installSysroot()` refreshes this layout even when the immutable sysroot marker already exists. This is required after APK replacement because Android changes `nativeLibraryDir`; health checks reject absent or stale links rather than silently accepting an unusable Lake installation.
 
+The installation marker is schema- and toolchain-aware. Legacy ID-only markers migrate in place only after the representative `Init` `.olean`, `.olean.private`, `.olean.server`, `.ilean`, and `.ir` facets validate as nonempty. An unhealthy active tree is never accepted solely because a marker exists: the installer clears stale staging, preflights the measured 2,194,903,155-byte packaged sysroot plus a 64 MiB reserve, validates a new staging tree before activation, preserves the former tree as `.previous` during the rename, and restores a healthy previous tree after interrupted activation. Complete per-file manifest/hash verification remains a later hardening layer.
+
 Writable links are metadata, not copied executable code.
 
 ## 7. Rebuild recipes by change type

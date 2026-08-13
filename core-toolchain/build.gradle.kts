@@ -9,6 +9,8 @@ android {
     defaultConfig {
         minSdk = 29
         buildConfigField("String", "TOOLCHAIN_ID", "\"lean-4.32.1-android1\"")
+        // Keep synchronized with: du -sb app/build/generated/toolchain/assets/toolchain
+        buildConfigField("long", "PACKAGED_SYSROOT_BYTES", "2194903155L")
     }
     buildFeatures { buildConfig = true }
     compileOptions {
