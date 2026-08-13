@@ -34,9 +34,9 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.runBlocking
 import org.lean4android.model.ToolchainHealth
 import org.lean4android.process.JvmCommandRunner
-import org.lean4android.process.ProcessCommand
 import org.lean4android.process.ProcessResult
 import org.lean4android.toolchain.AndroidToolchainLocator
+import org.lean4android.toolchain.ToolchainCommandFactory
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.concurrent.thread
@@ -80,17 +80,9 @@ class MainActivity : ComponentActivity() {
                 val started = TimeSource.Monotonic.markNow()
                 val result = runBlocking {
                     JvmCommandRunner().run(
-                        ProcessCommand(
-                            executable = layout.leanExecutable,
+                        ToolchainCommandFactory(layout, filesDir, cacheDir).lean(
                             arguments = listOf(sourceFile.path),
                             workingDirectory = projectDirectory,
-                            environment = mapOf(
-                                "HOME" to filesDir.path,
-                                "TMPDIR" to cacheDir.path,
-                                "LEAN_SYSROOT" to layout.sysroot.path,
-                                "LD_LIBRARY_PATH" to layout.leanExecutable.parentFile!!.path,
-                                "PATH" to "/system/bin",
-                            ),
                             timeout = 30.seconds,
                         ),
                     )

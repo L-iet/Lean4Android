@@ -309,7 +309,7 @@ Android randomizes the first path after an APK update. Never store it in the imm
 
 ### 6.3 Runtime environment
 
-Direct Lean commands require a deterministic environment containing `HOME`, app-writable `TMPDIR`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, and `LD_LIBRARY_PATH`. Lake additionally requires `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true`. Device testing showed that `lake lean` needs `TMPDIR` because Android's default temporary location is not writable by the app UID. Production launches use Kotlin `ProcessBuilder` with argument lists; never reproduce ADB shell command strings inside the app.
+Direct Lean commands require a deterministic environment containing `HOME`, app-writable `TMPDIR`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, and `LD_LIBRARY_PATH`. Lake commands use the same base environment plus `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true`, but deliberately omit a global `LEAN_PATH` so Lake can construct the project-aware search path for child Lean processes. Device testing showed that `lake lean` needs `TMPDIR` because Android's default temporary location is not writable by the app UID. `ToolchainCommandFactory` is the production source of these shell-free command definitions; UI code must not reconstruct their paths or environment maps.
 
 Lake expects conventional paths. The installer/locator must provide links conceptually equivalent to:
 
@@ -318,6 +318,8 @@ Lake expects conventional paths. The installer/locator must provide links concep
 <sysroot>/.lake/build/bin/lake    -> <nativeLibraryDir>/liblake_exe.so
 <sysroot>/.lake/build/lib/lean    -> <sysroot>/lib/lean
 ```
+
+`AndroidToolchainLocator.installSysroot()` refreshes this layout even when the immutable sysroot marker already exists. This is required after APK replacement because Android changes `nativeLibraryDir`; health checks reject absent or stale links rather than silently accepting an unusable Lake installation.
 
 Writable links are metadata, not copied executable code.
 

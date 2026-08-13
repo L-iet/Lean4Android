@@ -188,3 +188,17 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 - The full `testDebugUnitTest :app:assembleDebug` run passes. Because the audited toolchain payload was unchanged, Gradle reused staging/compression and rebuilt the application code, dex, and package in 3m43s. The resulting editor APK is 803,729,953 bytes with SHA-256 `e9caea1b87204e109ae2c43ffde2c02eae1eb7210b3512ad31f3b78c9bc4839b`.
 - Installed the editor APK for Android user 0 while preserving the validated sysroot. The tablet UI hierarchy confirms the multiline Lean source field, `Check Lean` action, and output panel render. Running the default source atomically created `files/projects/visual-probe/Main.lean`; the visible result reports exit 0 in 3,112 ms and displays `one_plus_one : 1 + 1 = 2` plus `"Hello from Lean on Android"`.
 - The user completed the hands-on visual test on the physical Android device and confirmed the editor can still edit source, communicate with Lean, and run Lean programs. This working visual loop is now a standing regression gate: subsequent runtime, project, LSP, and delivery changes may evolve the editor according to the roadmap, but must retain an operable visual source editor and an end-to-end Lean execution path.
+
+## 2026-08-13 — Runtime layout and command hardening
+
+### Implemented
+
+- Moved direct Lean and Lake command construction into a typed `ToolchainCommandFactory`. It owns absolute executable selection, the minimal cleared environment, app-writable `TMPDIR`, timeouts, and the deliberate difference between direct Lean's `LEAN_PATH` and Lake's project-aware child environment.
+- Changed the visual editor to use the shared Lean command factory without changing its source editing, atomic save, Check action, progress, or result UI.
+- Added an installer-owned `ToolchainLayoutAdapter` that atomically creates and refreshes `<sysroot>/bin/lean`, `<sysroot>/.lake/build/bin/lake`, and `<sysroot>/.lake/build/lib/lean`. Refresh runs even when sysroot data is already installed, repairing links after Android assigns a new native-library path during APK replacement.
+- Extended toolchain health reporting to reject absent or stale compatibility links.
+
+### Validation
+
+- Added host unit tests proving all compatibility links are created, a stale Lean executable target is replaced, direct Lean receives the complete Android-safe environment, and Lake receives its writable compatibility layout without a globally forced `LEAN_PATH`.
+- `testDebugUnitTest :app:compileDebugKotlin` passes after the refactor. The initial sandboxed attempt was blocked before compilation by Gradle's local-socket discovery; the identical approved run completed successfully in 4m22s.

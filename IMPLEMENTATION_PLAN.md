@@ -1,6 +1,6 @@
 # Lean4Android implementation plan
 
-Status: active roadmap; M0 complete, M1 reference-device conformance substantially complete; hardening and matrix validation remain
+Status: active roadmap; M0 complete, M1 reference-device conformance substantially complete; M1.5 runtime-layout hardening in progress
 Last revised: 2026-08-13
 
 ## 1. Goal and first release boundary
@@ -394,12 +394,11 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Implement installer-owned Lean/Lake compatibility links, including stale randomized APK-path refresh, and centralize the validated environment in `core-toolchain`/`core-process`; include app-writable `TMPDIR`.
-2. Turn the successful raw Lean LSP lifecycle exchange into automated framing/lifecycle tests, add did-open/diagnostics coverage, and verify graceful plus forced shutdown without orphan processes.
-3. Complete offline, APK-replacement migration, low-storage/interrupted-install, corrupted-facet, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
-4. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, termination, and visual-editor cases.
-5. Run the M1.6 delivery prototypes using the measured 803.7 MB debug APK and approximately 2.18 GB writable sysroot, then select release-channel packaging before expanding into project/editor features.
-6. Close M1 with an ADR for child processes, Bionic heap-tagging behavior, sysroot/layout patches, and the supported process/tool capability boundary.
+1. Turn the successful raw Lean LSP lifecycle exchange into automated framing/lifecycle tests, add did-open/diagnostics coverage, and verify graceful plus forced shutdown without orphan processes.
+2. Complete installer schema/marker validation, interrupted-install cleanup, free-space preflight, corrupted-facet reporting, offline/APK-replacement migration, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
+3. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, termination, and visual-editor cases.
+4. Run the M1.6 delivery prototypes using the measured 803.7 MB debug APK and approximately 2.18 GB writable sysroot, then select release-channel packaging before expanding into project/editor features.
+5. Close M1 with an ADR for child processes, Bionic heap-tagging behavior, sysroot/layout patches, and the supported process/tool capability boundary.
 
 ## 10. Reference material
 

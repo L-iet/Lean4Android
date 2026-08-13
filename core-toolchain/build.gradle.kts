@@ -25,5 +25,6 @@ kotlin {
 
 dependencies {
     implementation(project(":core-model"))
+    implementation(project(":core-process"))
     testImplementation(libs.junit)
 }
