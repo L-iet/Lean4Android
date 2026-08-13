@@ -309,7 +309,7 @@ Android randomizes the first path after an APK update. Never store it in the imm
 
 ### 6.3 Runtime environment
 
-Direct Lean commands require a deterministic environment containing `HOME`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, and `LD_LIBRARY_PATH`. Lake additionally requires `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true`. Production launches use Kotlin `ProcessBuilder` with argument lists; never reproduce ADB shell command strings inside the app.
+Direct Lean commands require a deterministic environment containing `HOME`, app-writable `TMPDIR`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, and `LD_LIBRARY_PATH`. Lake additionally requires `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true`. Device testing showed that `lake lean` needs `TMPDIR` because Android's default temporary location is not writable by the app UID. Production launches use Kotlin `ProcessBuilder` with argument lists; never reproduce ADB shell command strings inside the app.
 
 Lake expects conventional paths. The installer/locator must provide links conceptually equivalent to:
 
@@ -487,14 +487,18 @@ Do not count a toolchain as healthy merely because `Init.olean` exists. The heal
 
 On the Samsung SM-T870/API 33 reference tablet:
 
-- APK installation and first-run sysroot activation work;
+- the final 803,678,420-byte debug APK installs and fresh first-run sysroot activation works;
 - `lean --version` reports Lean 4.32.1 for `aarch64-linux-android`;
-- valid checking exits 0 in roughly one second;
-- invalid checking exits 1 with the expected tactic diagnostic in roughly 0.9 seconds;
-- the complete temporarily augmented sysroot is about 2,175,501 KiB; and
-- Lake 5.0.0 starts and reads local configuration.
+- valid checking exits 0 and invalid checking exits 1 with the expected source-positioned diagnostic;
+- a valid file under a path containing spaces and non-ASCII characters checks successfully;
+- the installed sysroot is approximately 2,175,523 KiB after adding compatibility links;
+- Lake 5.0.0 starts, `check-build` passes, `lake build` produces Lean library artifacts, and `lake lean` passes with app-writable `TMPDIR`;
+- a byte-exact non-PTY Lean Server 0.3.0 initialize/initialized/shutdown/exit exchange returns full capabilities;
+- a real Lean server child terminates on SIGTERM without a residual app-UID process;
+- a cold app restart reuses the activated sysroot and completes the production version probe in approximately 2.48 seconds; and
+- filtered logcat shows no app fatal exception, pointer-tagging abort, or native backtrace from the conformance run.
 
-The final APK with all split artifacts, Lake child builds, LSP, cancellation, update migration, and the API-level matrix are still M1 work.
+The current manual validation layout uses writable symlinks to the APK-installed Lean/Lake executables. Production code still needs to create and refresh those links automatically and centralize the complete environment. LSP document-open/diagnostics, offline proof, update migration, low-storage/interruption/corruption behavior, RSS/install timing, and the API-level matrix remain M1 work.
 
 ## 9. Recovery and operational cautions
 

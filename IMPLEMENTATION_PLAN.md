@@ -1,7 +1,7 @@
 # Lean4Android implementation plan
 
-Status: active roadmap; M0 complete, M1 device validation in progress
-Last revised: 2026-08-12
+Status: active roadmap; M0 complete, M1 reference-device conformance substantially complete; hardening and matrix validation remain
+Last revised: 2026-08-13
 
 ## 1. Goal and first release boundary
 
@@ -18,7 +18,7 @@ The first release is **not** a general Unix environment. It will not initially s
 
 ## 2. Decisions to validate before building the full app
 
-The broad architecture in `plan.md` is sound, but the following feasibility spike is the real first milestone.
+The broad architecture in `initial_plan.md` is sound, but the following feasibility spike is the real first milestone.
 
 ### 2.1 Executable placement
 
@@ -154,7 +154,7 @@ If CodeMirror wins, keep the bridge small and typed. JavaScript sends document e
 Implement one component as the only way to start native tools. It must:
 
 - use absolute executable and working-directory paths;
-- construct a minimal deterministic environment (`HOME`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, and the native library search path; plus `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true` for Lake);
+- construct a minimal deterministic environment (`HOME`, app-writable `TMPDIR`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, and the native library search path; plus `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true` for Lake);
 - derive all executable targets from current Android application metadata and validate/refresh sysroot compatibility links before launch;
 - stream stdout/stderr concurrently to avoid deadlock;
 - support timeouts, explicit cancellation, process-tree cleanup, and one LSP server per open project;
@@ -247,13 +247,13 @@ Install into a staging directory, verify signature/hash/version/free-space, then
 
 Exit: clean CI builds an APK and records reproducible inputs.
 
-### M1 — Android Lean runtime feasibility (in progress; highest uncertainty)
+### M1 — Android Lean runtime feasibility (in progress; reference-device execution proven)
 
 - Produce the arm64 Android Lean runtime/toolchain.
 - Package executable code in the APK-native location and data in a versioned sysroot.
 - Maintain the canonical Android patch and complete clean-build reproducibility.
 - Pass version and valid/invalid file checks through the production process boundary.
-- Complete Lake child-process path validation, LSP initialization/diagnostics, cancellation, cold-restart, Unicode-path, offline, and API-level probes.
+- Preserve the passing API-33 checks for Lake child builds, LSP lifecycle initialization, process termination, cold restart, and Unicode/space paths while adding document diagnostics, offline verification, RSS/timing data, and API-level coverage.
 - Publish native, sysroot, memory, startup, and latency measurements.
 
 Exit: a fresh offline install checks valid/invalid Lean files, builds a local Lean library with Lake, completes an LSP handshake, and leaves no orphan processes. The child-process architecture is retained unless the remaining matrix exposes an execution defect.
@@ -389,13 +389,12 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Finish the active `LEAN_SYSROOT` rebuild, reassemble/audit the distribution, and prove `lake lean` plus `lake build` on the physical device.
-2. Implement installer-owned Lean/Lake compatibility links and centralize the validated environment in `core-toolchain`/`core-process`.
-3. Complete raw Lean/Lake LSP initialize, diagnostics, shutdown, and forced-cancellation probes; check for orphan processes.
-4. Run cold restart, APK replacement, Unicode/space path, offline, low-storage/interruption, and timing/RSS measurements on the API-33 reference tablet.
-5. Rebuild the APK with all required split artifacts and measure compressed APK, installed native payload, writable sysroot, installation time, and peak free-space demand.
-6. Run the M1.6 delivery prototypes and select release-channel packaging before expanding into project/editor features.
-7. Add API-29 and current-Android physical/emulator coverage, then close M1 with an ADR and published conformance results.
+1. Implement installer-owned Lean/Lake compatibility links, including stale randomized APK-path refresh, and centralize the validated environment in `core-toolchain`/`core-process`; include app-writable `TMPDIR`.
+2. Turn the successful raw Lean LSP lifecycle exchange into automated framing/lifecycle tests, add did-open/diagnostics coverage, and verify graceful plus forced shutdown without orphan processes.
+3. Complete offline, APK-replacement migration, low-storage/interrupted-install, corrupted-facet, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet.
+4. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, and termination cases.
+5. Run the M1.6 delivery prototypes using the measured 803.7 MB debug APK and approximately 2.18 GB writable sysroot, then select release-channel packaging before expanding into project/editor features.
+6. Close M1 with an ADR for child processes, Bionic heap-tagging behavior, sysroot/layout patches, and the supported process/tool capability boundary.
 
 ## 10. Reference material
 
