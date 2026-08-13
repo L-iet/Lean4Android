@@ -20,8 +20,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.runBlocking
+import org.lean4android.model.ToolchainHealth
+import org.lean4android.process.JvmCommandRunner
+import org.lean4android.process.ProcessCommand
 import org.lean4android.toolchain.AndroidToolchainLocator
 import kotlin.concurrent.thread
+import kotlin.time.Duration.Companion.seconds
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -34,7 +39,35 @@ class MainActivity : ComponentActivity() {
                             val locator = AndroidToolchainLocator(applicationContext)
                             val report = runCatching {
                                 locator.installSysroot()
-                                locator.probe()
+                                when (val health = locator.locate()) {
+                                    is ToolchainHealth.Missing -> locator.probe()
+                                    is ToolchainHealth.Ready -> {
+                                        val layout = health.layout
+                                        val result = runBlocking {
+                                            JvmCommandRunner().run(
+                                                ProcessCommand(
+                                                    executable = layout.leanExecutable,
+                                                    arguments = listOf("--version"),
+                                                    workingDirectory = filesDir,
+                                                    environment = mapOf(
+                                                        "HOME" to filesDir.path,
+                                                        "LEAN_SYSROOT" to layout.sysroot.path,
+                                                        "LD_LIBRARY_PATH" to layout.leanExecutable.parentFile!!.path,
+                                                        "PATH" to "/system/bin",
+                                                    ),
+                                                    timeout = 30.seconds,
+                                                ),
+                                            )
+                                        }
+                                        buildString {
+                                            append("Ready: ${layout.id.value}\n")
+                                            append("lean --version: exit ${result.exitCode}")
+                                            if (result.timedOut) append(" (timed out)")
+                                            val output = (result.stdout + result.stderr).trim()
+                                            if (output.isNotEmpty()) append("\n$output")
+                                        }
+                                    }
+                                }
                             }.getOrElse { "Toolchain installation failed: ${it.message}" }
                             runOnUiThread { update(report) }
                         }
