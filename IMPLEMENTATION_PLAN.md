@@ -263,9 +263,10 @@ Exit: a fresh offline install checks valid/invalid Lean files, builds a local Le
 
 ### M1.5 — Runtime layout and upgrade hardening
 
-- Move all environment construction into a typed `ToolchainEnvironment` and command factory.
-- Extend the installer to validate all required module facets and create/refresh Lean/Lake compatibility symlinks.
-- Detect APK/native-directory changes independently of immutable sysroot data installation.
+- [x] Move all environment construction into a typed command factory.
+- [x] Create/refresh Lean/Lake compatibility symlinks and reject absent/stale links in health checks.
+- [x] Detect and repair APK/native-directory changes independently of immutable sysroot data installation; validated by update-install on the API-33 reference tablet.
+- Extend the installer to validate all required module facets.
 - Add installation-schema migration, interrupted-install cleanup, free-space preflight, corruption reporting, and cold-update tests.
 - Record an ADR for the child-process decision, Bionic heap-tagging compromise, and upstream patch maintenance.
 
