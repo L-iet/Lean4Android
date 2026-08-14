@@ -13,10 +13,10 @@ class ToolchainInstallationStateTest {
     @Test
     fun `complete facets and matching schema marker are healthy`() {
         val root = completeRuntime()
-        ToolchainInstallationState.writeMarker(root, "lean-test")
+        ToolchainInstallationState.writeMarker(root, "lean-test", "hash")
 
-        assertTrue(ToolchainInstallationState.problems(root, "lean-test").isEmpty())
-        assertTrue(root.resolve(".installed").readText().contains("schema=1"))
+        assertTrue(ToolchainInstallationState.problems(root, "lean-test", "hash").isEmpty())
+        assertTrue(root.resolve(".installed").readText().contains("schema=2"))
     }
 
     @Test
@@ -32,14 +32,24 @@ class ToolchainInstallationStateTest {
     @Test
     fun `health reports corrupt marker wrong ID and every missing facet`() {
         val root = completeRuntime()
-        root.resolve(".installed").writeText("schema=999\ntoolchain=other\n")
+        root.resolve(".installed").writeText("schema=999\ntoolchain=other\nmanifest=old\n")
         root.resolve("lib/lean/Init.ir").writeBytes(byteArrayOf())
 
-        val problems = ToolchainInstallationState.problems(root, "lean-test")
+        val problems = ToolchainInstallationState.problems(root, "lean-test", "new")
 
         assertTrue(problems.any { "Init.ir" in it })
         assertTrue(problems.any { "schema" in it })
         assertTrue(problems.any { "ID" in it })
+        assertTrue(problems.any { "manifest" in it })
+    }
+
+    @Test
+    fun `schema one marker is recognized only for complete matching toolchain`() {
+        val root = completeRuntime()
+        root.resolve(".installed").writeText("schema=1\ntoolchain=lean-test\n")
+
+        assertTrue(ToolchainInstallationState.hasSchemaOneMarker(root, "lean-test"))
+        assertFalse(ToolchainInstallationState.hasSchemaOneMarker(root, "other"))
     }
 
     private fun completeRuntime() = temporaryFolder.newFolder().apply {

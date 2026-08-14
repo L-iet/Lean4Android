@@ -13,18 +13,22 @@ class AndroidToolchainLocator(private val context: Context) {
         val staging = destination.resolveSibling("${destination.name}.installing")
         val previous = destination.resolveSibling("${destination.name}.previous")
         staging.deleteRecursively()
+        val manifest = readRuntimeManifest()
 
         if (ToolchainInstallationState.isLegacyMarker(destination, BuildConfig.TOOLCHAIN_ID)) {
-            ToolchainInstallationState.writeMarker(destination, BuildConfig.TOOLCHAIN_ID)
+            verifyAndMarkIfHealthy(destination, manifest)
         }
-        if (ToolchainInstallationState.problems(destination, BuildConfig.TOOLCHAIN_ID).isEmpty()) {
+        if (ToolchainInstallationState.hasSchemaOneMarker(destination, BuildConfig.TOOLCHAIN_ID)) {
+            verifyAndMarkIfHealthy(destination, manifest)
+        }
+        if (installationProblems(destination).isEmpty()) {
             previous.deleteRecursively()
             ToolchainLayoutAdapter.refresh(layout(destination))
             return destination
         }
 
         restorePreviousIfHealthy(destination, previous)
-        if (ToolchainInstallationState.problems(destination, BuildConfig.TOOLCHAIN_ID).isNotEmpty()) {
+        if (installationProblems(destination).isNotEmpty()) {
             ToolchainStoragePreflight.problem(
                 availableBytes = context.noBackupFilesDir.usableSpace,
                 payloadBytes = BuildConfig.PACKAGED_SYSROOT_BYTES,
@@ -36,7 +40,13 @@ class AndroidToolchainLocator(private val context: Context) {
                 requireMarker = false,
             )
             require(stagingProblems.isEmpty()) { stagingProblems.joinToString("\n") }
-            ToolchainInstallationState.writeMarker(staging, BuildConfig.TOOLCHAIN_ID)
+            val runtimeProblems = ToolchainRuntimeVerifier().problems(staging, manifest)
+            require(runtimeProblems.isEmpty()) { runtimeProblems.joinToString("\n") }
+            ToolchainInstallationState.writeMarker(
+                staging,
+                BuildConfig.TOOLCHAIN_ID,
+                BuildConfig.RUNTIME_MANIFEST_SHA256,
+            )
             activate(staging, destination, previous)
         }
         ToolchainLayoutAdapter.refresh(layout(destination))
@@ -52,16 +62,41 @@ class AndroidToolchainLocator(private val context: Context) {
             if (!layout.leanExecutable.isFile) add("Packaged Lean executable is absent")
             if (!layout.lakeExecutable.isFile) add("Packaged Lake executable is absent")
             if (!layout.leanLibraryDirectory.isDirectory) add("Lean sysroot data is not installed")
-            addAll(ToolchainInstallationState.problems(layout.sysroot, BuildConfig.TOOLCHAIN_ID))
+            addAll(installationProblems(layout.sysroot))
             addAll(ToolchainLayoutAdapter.problems(layout))
         }
         return if (problems.isEmpty()) ToolchainHealth.Ready(layout) else ToolchainHealth.Missing(problems)
     }
 
     private fun restorePreviousIfHealthy(destination: File, previous: File) {
-        if (ToolchainInstallationState.problems(previous, BuildConfig.TOOLCHAIN_ID).isNotEmpty()) return
+        if (installationProblems(previous).isNotEmpty()) return
         destination.deleteRecursively()
         check(previous.renameTo(destination)) { "Could not restore previous Lean sysroot" }
+    }
+
+    private fun installationProblems(root: File) = ToolchainInstallationState.problems(
+        root,
+        BuildConfig.TOOLCHAIN_ID,
+        BuildConfig.RUNTIME_MANIFEST_SHA256,
+    )
+
+    private fun readRuntimeManifest(): ToolchainRuntimeManifest {
+        val contents = context.assets.open("toolchain-manifest.tsv").bufferedReader().use { it.readText() }
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(contents.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        require(digest == BuildConfig.RUNTIME_MANIFEST_SHA256) { "Packaged runtime manifest digest is invalid" }
+        return ToolchainRuntimeManifest.parse(contents).also {
+            require(it.schema == 1) { "Unsupported packaged runtime manifest schema" }
+            require(it.toolchainId == BuildConfig.TOOLCHAIN_ID) { "Packaged runtime manifest toolchain mismatch" }
+        }
+    }
+
+    private fun verifyAndMarkIfHealthy(root: File, manifest: ToolchainRuntimeManifest): Boolean {
+        val problems = ToolchainRuntimeVerifier().problems(root, manifest)
+        if (problems.isNotEmpty()) return false
+        ToolchainInstallationState.writeMarker(root, BuildConfig.TOOLCHAIN_ID, BuildConfig.RUNTIME_MANIFEST_SHA256)
+        return true
     }
 
     private fun activate(staging: File, destination: File, previous: File) {

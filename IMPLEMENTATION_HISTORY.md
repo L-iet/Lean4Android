@@ -264,3 +264,18 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 - Generated a 14,864-file manifest with SHA-256 `f7e389dcee7bd8f146fcd9e7f05ca6ddc9243bd3e99e3261a5dee79e7d1aa797`. `:core-toolchain:testDebugUnitTest :app:writeFilteredToolchainManifest` passes, including missing, size-corrupt, hash-corrupt, traversal, duplicate, and malformed-hash cases.
 - The first generation took approximately eight minutes because enumerating thousands of files on `/mnt/d` is slow; no 2.19 GB rehash was performed. This checkpoint deliberately does not claim installed-tree enforcement yet: binding the manifest digest and one-time full verification into schema 2 is the next step, and routine visual Check must not rehash the sysroot.
 - The full unit/APK regression passes in 18m10s; changing the asset set forced recompression of the large payload. The APK contains the 1,785,411-byte manifest with 14,866 lines (two headers plus 14,864 files), is 804,540,704 bytes, and has SHA-256 `3af006cf096ec50431bda6af1db07efb1068226c245cd143541ab4e67c8a182c`. Update installation succeeded with schema-1 sysroot data preserved. The tablet entered its secure lock screen before the final visual Check, so hands-on/editor automation for this exact APK remains pending rather than being inferred; the immediately preceding schema-aware APK passed the editor on the same device.
+
+## 2026-08-13 — Schema-2 full runtime verification
+
+### Implemented
+
+- Advanced the installation marker to schema 2 and bound it to the exact filtered runtime-manifest SHA-256. The installer verifies the manifest asset's own digest/schema/toolchain ID before trusting its entries.
+- Fresh staging, legacy markers, and schema-1 installations now stream-verify all 14,864 runtime paths, sizes, and hashes before schema 2 is written. A corrupt legacy/schema-1 tree falls through to the existing free-space-checked staged replacement path; it is never marked verified.
+- Routine schema-2 health remains intentionally fast: marker digest, representative facets, native/layout links, Lean library, and UTC fallback are checked without rehashing 2.19 GB on every visual Check.
+
+### Device validation
+
+- After the tablet was unlocked, closed the pending manifest-APK gate: visual Check exited 0 in 3,013 ms, workspace-aware `lake serve` returned the expected version-1 `rfl` diagnostic and exited 0, and forced transport stop left zero Lean/Lake processes.
+- Update-installed schema 2 over the existing schema-1 2,175,531 KiB sysroot and invoked its one-time full verification through the editor. The marker migrated in place to schema 2 with manifest digest `f7e389dcee7bd8f146fcd9e7f05ca6ddc9243bd3e99e3261a5dee79e7d1aa797`; Lean then exited 0 with expected output. The subsequent Check skipped full hashing and completed Lean execution in 1,505 ms.
+- Repeated graceful diagnostics and forced-cleanup conformance after migration; both pass. The UI currently reports only Lean execution elapsed time, so the full migration duration was not measured separately and is not inferred from the displayed result.
+- Corrected the migration recovery branch so a legacy/schema-1 hash failure falls through to staged replacement instead of surfacing immediately from the verifier. The final `testDebugUnitTest :app:assembleDebug` run passes in 3m48s; its update installation preserves the schema-2 marker, and the visual editor again exits 0 with expected output in 3,013 ms. Filtered logcat contains no app crash; a previously noticed `FATAL EXCEPTION` was traced to overlapping `uiautomator dump` helper processes (`UiAutomationService ... already registered`), not `org.lean4android.app`.
