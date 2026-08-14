@@ -1,6 +1,6 @@
 # Lean4Android
 
-An Android-native Lean 4 code editor and proof-assistant environment. The project is in its runtime-feasibility phase. A pinned Lean 4.32.1/Lake 5.0.0 arm64 toolchain now cross-builds, packages, installs, and runs on the API-33 reference tablet; runtime-layout hardening, delivery design, API coverage, and the product editor remain in progress.
+An Android-native Lean 4 code editor and proof-assistant environment. A pinned Lean 4.32.1/Lake 5.0.0 arm64 toolchain cross-builds, packages, installs, and runs on the API-33 reference tablet. Runtime/layout hardening, core delivery prototypes, and the offline two-module project lifecycle are complete there; broader API coverage and the product editor remain in progress.
 
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the roadmap, [IMPLEMENTATION_HISTORY.md](IMPLEMENTATION_HISTORY.md) for completed work and decisions, and [MVP_AND_REBUILDING.md](MVP_AND_REBUILDING.md) for build, deployment, and incremental-rebuild procedures.
 
@@ -19,4 +19,4 @@ GRADLE_USER_HOME="$PWD/.gradle-user-home" ./gradlew --no-build-cache testDebugUn
 
 The current debug APK contains immutable Lean/Lake executables plus the complete filtered core/Std sysroot. On the reference tablet, fresh installation, `lean --version`, valid/invalid checking, Unicode paths, Lean-library `lake build`, `lake lean`, an LSP lifecycle handshake, cold restart, and child termination pass. The APK is about 803.7 MB and the writable sysroot about 2.18 GB, so this monolithic packaging is a feasibility artifact rather than the intended release-delivery design.
 
-Installer-owned Lean/Lake link refresh and typed deterministic command construction now pass an APK-update test on the reference tablet. `core-lsp` provides tested byte-accurate JSON-RPC framing, lifecycle/document messages, and document-version gating. Automated non-PTY `lake serve` conformance now reaches real versioned diagnostics and clean shutdown on-device after adding Android's required app-owned timezone fallback. Current priorities are app-owned server state, installer integrity and recovery, offline/API-level coverage, and the core-toolchain delivery spike.
+Installer-owned Lean/Lake link refresh and typed commands pass update and corruption-repair tests. `core-lsp` provides typed framing/dispatch plus retained service ownership. `core-project` provides compatible templates, atomic saves, supported Lake commands, and safe import/export; its complete error/fix/build/export/delete/reimport scenario passes offline against the final migration-fix APK on-device. A minimal two-tab editor builds both sample modules. Current priorities are durable M3 editor state, Activity/service reconnection, live diagnostics, and broader API coverage.

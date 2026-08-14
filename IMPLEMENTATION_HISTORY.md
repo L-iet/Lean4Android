@@ -279,3 +279,196 @@ This is the durable engineering log for Lean4Android. Entries summarize shipped 
 - Update-installed schema 2 over the existing schema-1 2,175,531 KiB sysroot and invoked its one-time full verification through the editor. The marker migrated in place to schema 2 with manifest digest `f7e389dcee7bd8f146fcd9e7f05ca6ddc9243bd3e99e3261a5dee79e7d1aa797`; Lean then exited 0 with expected output. The subsequent Check skipped full hashing and completed Lean execution in 1,505 ms.
 - Repeated graceful diagnostics and forced-cleanup conformance after migration; both pass. The UI currently reports only Lean execution elapsed time, so the full migration duration was not measured separately and is not inferred from the displayed result.
 - Corrected the migration recovery branch so a legacy/schema-1 hash failure falls through to staged replacement instead of surfacing immediately from the verifier. The final `testDebugUnitTest :app:assembleDebug` run passes in 3m48s; its update installation preserves the schema-2 marker, and the visual editor again exits 0 with expected output in 3,013 ms. Filtered logcat contains no app crash; a previously noticed `FATAL EXCEPTION` was traced to overlapping `uiautomator dump` helper processes (`UiAutomationService ... already registered`), not `org.lean4android.app`.
+
+## 2026-08-13 — Deterministic activation rollback coverage
+
+### Implemented
+
+- Isolated sysroot directory activation and rollback recovery from the Android locator into a host-testable `ToolchainActivation` boundary while preserving the production staging/destination/previous layout.
+- Hardened the failed-activation branch: failure to rename the preserved tree back into place is now surfaced explicitly instead of being ignored before reporting the original activation failure.
+- Added deterministic tests for a successful atomic directory swap, a staging-rename failure that restores the old sysroot, cold-start recovery that accepts only a healthy `.previous` tree, and retention of an unhealthy active tree when rollback is also unhealthy.
+
+### Validation and remaining boundary
+
+- `:core-toolchain:testDebugUnitTest` passes all focused toolchain tests; the final run including the explicit rollback-rename failure case completed in 1m15s. The first compile also caught and prompted correction of a missing test-only `java.io.File` import.
+- The complete `testDebugUnitTest` regression passes across the app, model, process, toolchain, and LSP modules in 3m36s (107 tasks; 3 executed and 104 up-to-date).
+- These tests inject rename failures without copying the 2.19 GB payload and close the host-testable state-machine gap. They do not replace the planned Android instrumented interruption, real low-storage, complete installed-tree corruption, or cold-update cases.
+
+## 2026-08-13 — Explicit runtime audit and process-boundary ADR
+
+### Implemented
+
+- Added `AndroidToolchainLocator.verifyInstalledRuntime()` as an explicit slow path. It first applies schema-2 representative health checks, then reads the digest-bound packaged manifest and streams size/hash verification across every installed runtime entry.
+- Added a **Verify runtime** action beside **Check Lean** in the visual probe. The audit runs off the UI thread, disables concurrent actions, and reports duration, success, or the complete mismatch list. Ordinary startup and Lean checks do not call it.
+- Added ADR 0001 accepting packaged child processes, data-only writable sysroots, typed shell-free command construction, compatibility-link refresh, the Bionic heap-tagging and `LEAN_SYSROOT` patches, and the current no-shell/no-native-build capability boundary. JNI and a native launcher remain evidence-triggered fallbacks.
+
+### Validation and boundary
+
+- Added app unit coverage for successful and failed integrity-result presentation. `:app:testDebugUnitTest :app:compileDebugKotlin` passes in 3m48s (76 tasks; 8 executed and 68 up-to-date).
+- The implementation reuses the already-tested manifest parser/verifier. A physical full audit is intentionally still pending because it will read and hash approximately 2.19 GB; its measured duration belongs in the reference-device performance record.
+
+## 2026-08-13 — M1.6 monolithic-package baseline
+
+### Measurements and findings
+
+- Audited the current 804,600,480-byte debug APK (`a121310dd949b5918bdaaed3b04a7b35a7e20e77e33476cb512920bce4009acc`) with ZIP entry accounting. Its 14,864 `assets/toolchain/` files occupy 2,192,429,171 bytes uncompressed and 692,307,895 bytes compressed.
+- The eight arm64 native entries occupy 286,998,976 bytes uncompressed and 79,491,830 bytes compressed. These must remain APK-installed executable code; the runtime assets are data-delivery candidates.
+- `.olean.private` dominates both installed and download size: 1,330,725,152 uncompressed bytes and 443,221,498 compressed bytes. It cannot be removed by filtering because the Android conformance sequence already proved ordinary imports require private facets.
+- Added `docs/delivery/M1_6_BASELINE.md` with the complete facet table, reproduction method, and the resulting independent budgets for base native code, runtime download, expanded installation, and rollback/staging headroom.
+
+### Boundary
+
+- This measurement covers the current monolithic debug APK, not an AAB or release build and not a delivery prototype. The next M1.6 work remains Play asset-pack layout plus an independently signed, stream-installed data pack behind one installer interface.
+
+## 2026-08-13 — App-owned long-lived Lean LSP session
+
+### Implemented
+
+- Connected `core-lsp` to the existing shell-free `core-process` boundary and added `LeanLspSession`, which owns one launched server, its byte-framed stdin/stdout transport, and document-version gate.
+- Enforced lifecycle ordering from process start through initialize request, initialized notification, document open/change/close, shutdown request, exit, and closed state. Invalid ordering fails before writing protocol bytes.
+- Added graceful-exit behavior that closes server stdin, waits for the requested grace period, and falls back to forced termination. Closing a session before shutdown also owns forced cleanup.
+- Kept raw inbound message reading single-owner and blocking by design. JSON-RPC response/notification dispatch, dynamic registration replies, diagnostic decoding, and reconnectable Android service ownership are the next layer rather than being approximated with substring parsing in production.
+
+### Validation
+
+- Added fake-process integration tests through the real framing implementation. They assert exact lifecycle/document message order, stale diagnostic rejection after a version change, graceful exit without forced termination, forced cleanup on early close, and invalid lifecycle rejection.
+- `:core-lsp:testDebugUnitTest` passes in 2m37s (38 tasks; 6 executed and 32 up-to-date).
+- The complete `testDebugUnitTest` regression passes after the integrity UI, activation hardening, and LSP session work in 2m54s (107 tasks; 2 executed and 105 up-to-date).
+- The first `:app:assembleDebug` pass completed in 3m43s; after correcting the shared busy label from check-specific wording, the final incremental pass completed in 3m23s while reusing unchanged toolchain staging/compression. The resulting 804,600,480-byte APK has SHA-256 `a121310dd949b5918bdaaed3b04a7b35a7e20e77e33476cb512920bce4009acc`; ZIP integrity passes and inspection confirms 2,431 each of private/server/IR facets plus all eight arm64 native entries. ADB started successfully but reported no attached device, so install, visual Check, the new full integrity action, and device LSP regression remain an explicit handoff rather than inferred validation.
+
+## 2026-08-13 — Current-APK device audit, offline proof, and LSP metrics
+
+### Device recovery and validation
+
+- `lsusb` confirmed the attached Samsung tablet at bus/device `001/002`; its WSL USB node had reverted to `root:root` mode `0600`. Changed only that node to `root:plugdev` mode `0660`, restarted the project ADB with `ADB_LIBUSB=1`, and restored the authorized SM-T870 transport.
+- Update-installed the 804,600,480-byte APK for Android user 0 while preserving schema-2 sysroot/project data. UI hierarchy confirms the multiline editor plus **Check Lean** and **Verify runtime** actions. Production Check exited 0 in 2,911 ms with the expected theorem type and string evaluation.
+- Ran the user-triggered full integrity audit. All 14,864 installed entries matched the digest-bound packaged manifest in 16,778 ms, closing the earlier physical-validation handoff without adding hashing to routine checks.
+- Repeated workspace-aware graceful LSP diagnostics and forced transport cleanup. The invalid theorem published the expected `rfl` diagnostic, graceful shutdown exited 0, and forced termination left zero Lean/Lake processes.
+
+### Measurement instrumentation and offline result
+
+- Extended `run-device-lsp.py` to emit initialize latency, `didOpen`-to-first-diagnostic latency, launch-to-diagnostic latency, and peak aggregate Lean/Lake RSS while retaining its lifecycle assertions.
+- A connected warm run measured 399 ms to initialize, 1,047 ms from `didOpen` to the first diagnostic, 1,450 ms from launch to diagnostics, and 714,888 KiB peak aggregate RSS.
+- Disabled Wi-Fi after recording its original enabled/connected state. The complete local LSP workflow still passed: 413 ms to initialize, 1,035 ms from `didOpen` to diagnostics, 1,453 ms launch-to-diagnostics, and 591,564 KiB peak aggregate RSS. Restored Wi-Fi and confirmed reconnection to the original network.
+- Aggregate RSS sums Lean and Lake process RSS and can double-count shared mappings. Treat it as an upper bound; collect process-tree PSS before using the number as a memory budget.
+
+## 2026-08-13 — Physical corruption repair exposed symlink-following deletion
+
+### Probe and root cause
+
+- Confirmed approximately 37 GB free on `/data`, then preserved `Init.ilean`, changed one byte without changing its size, and changed only the installation marker to schema 1. Production Check correctly rejected full verification and staged all 2,175,501 KiB from packaged assets.
+- The first activation unexpectedly produced schema 2 with an empty `lib/lean`, and Check reported every representative facet missing. Inspection showed the old `.previous/.lake/build/lib/lean` absolute compatibility link targeted the stable destination path.
+- Root cause: Kotlin `File.deleteRecursively()` follows directory symlinks. After staging was renamed to the stable destination, deleting `.previous` traversed its old absolute compatibility link and erased the new destination's Lean library. This destructive interaction was not represented by the earlier payload-only activation tests.
+
+### Fix and regression coverage
+
+- Added `deleteTreeWithoutFollowingLinks()` using `Files.walkFileTree` without `FOLLOW_LINKS`, and replaced recursive deletion for staging, rollback cleanup, and recovery replacement.
+- Added an exact host regression: the old tree contains an absolute Lake-style link into its own destination, a new tree takes that destination name, and rollback cleanup must leave the new target bytes intact.
+- `:core-toolchain:testDebugUnitTest` passes with the new reproducer in 2m15s. Built the corrected APK in 3m21s and update-installed it over the intentionally incomplete runtime. The final APK is 804,600,480 bytes with SHA-256 `d67647ce2a65f3826bdb8073527532081d54b95577719a6b5566c87bcf188dcb`; ZIP integrity passes with 2,431 each of private/server/IR facets and all eight arm64 native entries.
+
+### Corrected physical recovery
+
+- Production Check restaged the full 2,175,501 KiB, stream-verified it, activated schema 2, preserved `Init.olean`, and removed both `.installing` and `.previous`. Lean then exited 0 in 3,115 ms with expected output. Wall time from Check through repaired Lean output was approximately 54.2 seconds.
+- A post-repair user audit matched every manifest entry in 16,626 ms. Graceful LSP diagnostics passed and forced cleanup again left zero processes.
+- Added Android `dumpsys meminfo` PSS sampling to the LSP probe. The first cold post-repair run measured 1,072 ms initialize, 2,094 ms `didOpen`-to-diagnostic, 3,171 ms launch-to-diagnostic, 674,488 KiB aggregate RSS, and 544,681 KiB aggregate PSS. The immediate warm repeat measured 419 ms, 967 ms, 1,393 ms, 695,596 KiB RSS, and 89,430 KiB PSS. Report cold and warm results separately.
+- Timed same-version installation of the 804.6 MB APK at 36.22 seconds. Before Check its compatibility links still referenced the prior randomized APK path; production Check refreshed them to the current path and remained functional.
+
+## 2026-08-13 — Physical interrupted-staging recovery
+
+### Validation
+
+- Reintroduced the same one-byte/schema-1 corruption, started production repair, and force-stopped the app after staging reached 2,175,505 KiB but before `.installed` was written or activation began. The active tree remained schema 1 and the complete-but-unmarked `.installing` tree remained on disk, accurately representing process death before commit.
+- Restarted production Check. The no-follow cleanup removed the stale staging tree before creating a new one, restaged and stream-verified the complete payload, briefly preserved the old active tree as `.previous`, activated schema 2, and safely removed rollback without traversing its compatibility link.
+- Recovery left neither `.installing` nor `.previous`, restored the expected manifest-bound marker, and Lean exited 0 in 2,913 ms with expected output. Restart-to-result wall time was approximately 85.4 seconds; this includes deleting the complete stale tree, copying/verifying a second complete tree, activation cleanup, and Lean execution.
+- A real low-storage case remains open. The reference device currently has about 37 GB free; manufacturing pressure by consuming unrelated user storage would be inappropriate. The exact preflight threshold remains host-tested.
+- The final complete `testDebugUnitTest` regression passes in 2m00s (107 tasks; 4 executed and 103 up-to-date). Final device health shows a 2,175,530 KiB sysroot, a Lean link targeting the current APK native directory, and no residual Lean/Lake process.
+
+## 2026-08-13 — Low-storage pressure moved beyond MVP
+
+- Removed manufactured low-storage pressure from M1/MVP exit requirements. The reference tablet has ample free capacity, and filling unrelated user storage solely to create pressure is disproportionate to the MVP.
+- Retained the exact byte-based preflight and readable required/available-space failure. Installed footprint, update/install time, full-audit duration, and cold/warm PSS/latency remain published facts that can inform users when their device is not a practical fit.
+- Kept low-storage pressure as an optional M6 hardening/stretch case. This changes test prioritization only; it does not weaken atomic staging, corruption rejection, rollback, or insufficient-capacity refusal.
+
+## 2026-08-13 — Typed JSON-RPC dispatch layer
+
+### Implemented
+
+- Added a dependency-free recursive JSON value parser/renderer with strict trailing-content, duplicate-key, escape, number, object, and array validation so host tests execute the same parsing code used on Android.
+- Added typed JSON-RPC request, notification, and response envelopes with numeric/string IDs and exact `result` versus `error` validation.
+- Added `LeanLspDispatcher`: Lean `client/registerCapability` requests receive a protocol response automatically; other server requests and ordinary notifications reach a typed sink; `publishDiagnostics` is decoded and delivered only when the session's open-document version gate accepts it.
+- Connected dispatcher construction and single-message read/dispatch to `LeanLspSession`. This established the single-reader boundary subsequently implemented by `LeanLspSupervisor`; no competing reader or substring-based production parsing was introduced.
+
+### Validation
+
+- Added tests for nested Unicode JSON round trips, automatic dynamic-registration replies, stale versus current diagnostic routing, notification delivery, malformed JSON, duplicate fields, ambiguous responses, invalid versions/IDs, and trailing-comma rejection.
+- `:core-lsp:testDebugUnitTest` passes in 1m28s (38 tasks; 5 executed and 33 up-to-date). Reconnectable Android service ownership is now the next layer.
+
+## 2026-08-13 — Single-reader LSP supervisor
+
+### Implemented
+
+- Added `LeanLspSupervisor` as the sole owner of a session's blocking inbound reader. It creates one named daemon reader thread, dispatches through the typed session dispatcher, and prevents duplicate starts.
+- Made supervisor termination explicit and observable: clean server EOF, caller-requested close, and protocol/transport failure are distinct stop reasons. Closing remains idempotent, closes the session/process, and briefly joins the reader without deadlocking a callback running on that reader.
+- Kept Android component ownership out of `core-lsp`: the next bound-service layer can retain this supervisor across activity recreation without coupling the protocol library to an Activity or Service lifecycle.
+
+### Validation
+
+- Added tests through real byte framing for multi-message dispatch, automatic `client/registerCapability` reply bytes, clean EOF, malformed-server failure propagation, duplicate-start rejection, and forced process cleanup.
+- `:core-lsp:testDebugUnitTest` passes in 1m24s (38 tasks; 5 executed and 33 up-to-date).
+- The stricter dispatcher/session changes also pass the complete `testDebugUnitTest` regression in 2m27s (107 tasks; 5 executed and 102 up-to-date).
+
+## 2026-08-13 — Reconnectable bound-service ownership foundation
+
+### Implemented
+
+- Added the app's dependency on `core-lsp` and declared a non-exported `LeanLspService`, keeping protocol/process access inside the application.
+- Added a local Binder contract with generation-tagged per-project snapshots and replay-on-attach listeners. A recreated Activity can query existing ownership and distinguish a current session from an older callback.
+- The service launches and owns one `LeanLspSession`/`LeanLspSupervisor` per project, rejects duplicate ownership before launching another child, provides explicit project stop, and closes all retained supervisors during service destruction.
+- Kept this first component bound-only. Foreground promotion is intentionally deferred until a user-visible background operation and notification/cancellation contract exist; binding the editor and validating recreation are the next integration step.
+
+### Validation
+
+- `:app:testDebugUnitTest` compiles the service, manifest, and new module dependency and passes in 4m07s (91 tasks; 12 executed, 2 from cache, and 77 up-to-date).
+- The complete post-service `testDebugUnitTest` regression passes in 2m33s (111 tasks, all up-to-date). The task count increased from 107 because the app now consumes and validates the `core-lsp` library path.
+
+## 2026-08-13 — M1.6 delivery prototypes and decision
+
+### Implemented and decided
+
+- Added a delivery-neutral `RuntimePayloadSource` and one manifest-driven streaming installer. APK assets and an independently distributed ZIP now share entry-size/SHA-256 validation and the existing atomic activation boundary.
+- Added complete detached RSA/SHA-256 verification before an independent ZIP exposes entries. No release key was committed; measurements used a temporary `/tmp` test key.
+- Added a conditional `core_toolchain_pack` install-time Play Asset Delivery module. `-PplayAssetDelivery=true` removes sysroot data from base and puts data plus manifest in the pack while executable/native entries remain APK-installed.
+- Selected install-time PAD for Play and a signed ZIP independently. A smaller artifact model is deferred because both fit without deleting conformance-required private/server/IR facets.
+
+### Measurements and validation
+
+- The PAD debug AAB is 693,129,838 bytes (SHA-256 `46edcbed0eff9a36ed390701d799ed9035a70920c9b79b11cd7fbf2d29d3f9f7`). It contains the runtime under `core_toolchain_pack/assets/` and no base `Init.olean` duplicate; the `/mnt/d` build took 21m33s.
+- The independent ZIP is 595,064,864 bytes (SHA-256 `43cf8ffce36db523cbf121b56cdb02c8850063f9c19b3a395c65e164aade6410`) with a 256-byte signature (SHA-256 `2473601a28b0cb77ffdd6b68ea8d41770ecf645f9b50480c768eb8509826b9af`). OpenSSL verification and ZIP integrity pass.
+- A complete external-pack test authenticated, streamed, size/hash-checked, and re-verified all 14,864 entries. The successful Gradle invocation took 1m26s including compilation. Its first run safely exposed the builder/source `toolchain/` prefix mismatch before copying; the source contract now accepts that documented prefix.
+- Current Play limits checked on 2026-08-13 are 1.5 GB per asset pack and 4 GB cumulative install-time content, both above this payload. Final bundletool/Play Console measurement and limit revalidation remain release tasks; `docs/delivery/M1_6_DECISION.md` records the channel boundary and budgets.
+
+## 2026-08-13 — M2 offline two-module project lifecycle
+
+### Implemented
+
+- Added `core-project` with strict IDs, schema/toolchain compatibility metadata, create/list/open/delete, monotonic atomic saves, typed `lake lean`/supported `lake build`, and a two-module template.
+- Added deterministic atomic ZIP export and traversal-safe import with entry-count and 256 MiB expansion bounds. Unsupported Git/network dependencies, executable/native targets, and shell-download workflows fail before Lake launch.
+- Added bounded structured one-shot job state and cancellation plus a reconnectable, non-exported `ProjectJobService`; retained LSP ownership remains in `LeanLspService`. Foreground promotion remains deferred until background work has a notification/cancellation UI contract.
+- Replaced the single editor buffer with simple `Main.lean` and `Basic.lean` tabs. **Build project** atomically saves both and runs the supported Lake build.
+
+### Host and device validation
+
+- Focused project/process/toolchain/app suites pass, including hostile ZIP traversal, wrong-toolchain and unsupported-workflow rejection, rapid-save timestamp monotonicity, signed-pack tampering, bounded output, and cancellation. The Android instrumentation source compiles.
+- Recovered the attached SM-T870 by changing only `/dev/bus/usb/001/002` from `root:root 0600` to `root:plugdev 0660`, restarting project ADB with `ADB_LIBUSB=1`, and using authorized serial `R52R40K1PPN`.
+- The first two offline instrumentation runs exposed template defects: sub-second error/fix writes were invisible to Lake's timestamp cache, then `roots = ["Main"]` excluded the imported module. Saves now advance modification time by at least one second, and both `Main` and generated `*.Basic` are explicit roots.
+- The final API-33 test passed offline in 6.78s: create two modules, observe an intentional error, fix it, build both, export, delete, import, and rebuild. Wi-Fi was restored to enabled; the imported project exists and `ps -A` shows no residual Lean/Lake process.
+- The passing app APK is 804,635,316 bytes (SHA-256 `f115d148ac1f485d199d0b8c7d1009f478020c9ca14f109387ef82dfe812410e`); its 823,291-byte instrumentation APK has SHA-256 `61c7900b8533066d62988cb7a3e6c530821adbd7fc41921b4073d50902d5a132`. Clean-cache assembly took 39m32s on `/mnt/d`; the final incremental rebuild took 3m25s.
+
+## 2026-08-13 — Post-crash device rerun and visible editor migration fix
+
+- Recovered the restarted WSL USB attachment by restoring only `/dev/bus/usb/001/002` to `root:plugdev 0660`; project ADB/libusb reconnected to authorized SM-T870 serial `R52R40K1PPN`.
+- The complete host `testDebugUnitTest` regression plus app/test assembly passed in 15m07s. Update-installed both artifacts and reran the M2 instrumentation scenario with Wi-Fi disabled; all error/fix/build/export/delete/import/rebuild assertions passed in 8.82s, then Wi-Fi was restored.
+- Launched the physical UI and confirmed the visible `Main.lean` and `Basic.lean` tabs. The first manual **Build project** exposed an upgrade-only collision with the legacy M1 `projects/visual-probe` directory, which predates M2 metadata. Preserved that directory and moved the M2 visual sample to `projects/visual_probe`; the underscore retains the generated Lean namespace `VisualProbe`.
+- `:app:testDebugUnitTest :app:assembleDebug` passed after the migration fix in 5m06s. Update-installed APK SHA-256 `f0a63caec34f03c59e556f59edb75c10c70dceb327cad8d0b3d7e4b13e1d91b8` and left the editor visibly open on a successful result: exit 0 in 3,918 ms, `VisualProbe.Basic` and `Main` built, theorem output displayed, and `#eval` returned `42`.
+- Final device state has Wi-Fi enabled and no residual Lean/Lake child. The `ps` match is only `org.lean4android.app` itself.
+- Final exact-build confirmation: reinstalled migration-fix app APK `f0a63caec34f03c59e556f59edb75c10c70dceb327cad8d0b3d7e4b13e1d91b8` together with instrumentation APK `61c7900b8533066d62988cb7a3e6c530821adbd7fc41921b4073d50902d5a132`, disabled Wi-Fi, and reran `M2OfflineProjectLifecycleTest`. The complete error/fix/build/export/delete/reimport/rebuild scenario passed in 6.791s. Wi-Fi was restored to enabled, the explicit process-name check found no Lean/Lake child, and the latest editor was reopened.

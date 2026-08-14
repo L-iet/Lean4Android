@@ -35,41 +35,49 @@ import kotlinx.coroutines.runBlocking
 import org.lean4android.model.ToolchainHealth
 import org.lean4android.process.JvmCommandRunner
 import org.lean4android.process.ProcessResult
+import org.lean4android.project.LeanProjectRepository
 import org.lean4android.toolchain.AndroidToolchainLocator
 import org.lean4android.toolchain.ToolchainCommandFactory
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.concurrent.thread
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
-private const val DEFAULT_SOURCE = """def greeting : String := "Hello from Lean on Android"
+private const val LIBRARY_SOURCE = """namespace VisualProbe
 
-theorem one_plus_one : 1 + 1 = 2 := by
-  rfl
+def answer : Nat := 42
 
-#check one_plus_one
-#eval greeting
+theorem answer_is_positive : 0 < answer := by decide
+
+end VisualProbe
 """
+
+private const val MAIN_SOURCE = """import VisualProbe.Basic
+
+#check VisualProbe.answer_is_positive
+#eval VisualProbe.answer
+"""
+
+// Underscore keeps the generated Lean module name VisualProbe while avoiding the legacy M1 directory.
+private const val EDITOR_PROJECT_ID = "visual_probe"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                LeanEditorScreen(onCheck = ::checkLeanSource)
+                LeanEditorScreen(
+                    onCheck = ::checkLeanSource,
+                    onVerifyRuntime = ::verifyRuntime,
+                )
             }
         }
     }
 
-    private fun checkLeanSource(source: String, update: (EditorRunState) -> Unit) {
+    private fun checkLeanSource(sources: Map<String, String>, update: (EditorRunState) -> Unit) {
         thread(name = "lean-editor-check") {
             val state = runCatching {
-                val projectDirectory = filesDir.resolve("projects/visual-probe").apply { mkdirs() }
-                val sourceFile = projectDirectory.resolve("Main.lean")
-                writeAtomically(sourceFile, source)
-
                 val locator = AndroidToolchainLocator(applicationContext)
                 locator.installSysroot()
                 val layout = when (val health = locator.locate()) {
@@ -77,17 +85,26 @@ class MainActivity : ComponentActivity() {
                     is ToolchainHealth.Missing -> error(health.problems.joinToString("\n"))
                 }
 
+                val repository = LeanProjectRepository(filesDir.resolve("projects"), layout.id.value)
+                if (!filesDir.resolve("projects/$EDITOR_PROJECT_ID").exists()) repository.create(EDITOR_PROJECT_ID)
+                sources.forEach { (path, source) -> repository.save(EDITOR_PROJECT_ID, path, source) }
+                val factory = ToolchainCommandFactory(layout, filesDir, cacheDir)
                 val started = TimeSource.Monotonic.markNow()
                 val result = runBlocking {
-                    JvmCommandRunner().run(
-                        ToolchainCommandFactory(layout, filesDir, cacheDir).lean(
-                            arguments = listOf(sourceFile.path),
-                            workingDirectory = projectDirectory,
-                            timeout = 30.seconds,
-                        ),
-                    )
+                    JvmCommandRunner().run(repository.lakeBuild(factory, EDITOR_PROJECT_ID))
                 }
                 EditorRunState.Finished(result, started.elapsedNow())
+            }.getOrElse { EditorRunState.Failed(it.message ?: it::class.java.simpleName) }
+            runOnUiThread { update(state) }
+        }
+    }
+
+    private fun verifyRuntime(update: (EditorRunState) -> Unit) {
+        thread(name = "lean-runtime-integrity") {
+            val started = TimeSource.Monotonic.markNow()
+            val state = runCatching {
+                val problems = AndroidToolchainLocator(applicationContext).verifyInstalledRuntime()
+                EditorRunState.IntegrityFinished(problems, started.elapsedNow())
             }.getOrElse { EditorRunState.Failed(it.message ?: it::class.java.simpleName) }
             runOnUiThread { update(state) }
         }
@@ -110,13 +127,20 @@ private sealed interface EditorRunState {
     data object Idle : EditorRunState
     data object Running : EditorRunState
     data class Finished(val result: ProcessResult, val elapsed: Duration) : EditorRunState
+    data class IntegrityFinished(val problems: List<String>, val elapsed: Duration) : EditorRunState
     data class Failed(val message: String) : EditorRunState
 }
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun LeanEditorScreen(onCheck: (String, (EditorRunState) -> Unit) -> Unit) {
-    var source by remember { mutableStateOf(DEFAULT_SOURCE) }
+private fun LeanEditorScreen(
+    onCheck: (Map<String, String>, (EditorRunState) -> Unit) -> Unit,
+    onVerifyRuntime: ((EditorRunState) -> Unit) -> Unit,
+) {
+    var sources by remember {
+        mutableStateOf(mapOf("Main.lean" to MAIN_SOURCE, "VisualProbe/Basic.lean" to LIBRARY_SOURCE))
+    }
+    var activePath by remember { mutableStateOf("Main.lean") }
     var runState by remember { mutableStateOf<EditorRunState>(EditorRunState.Idle) }
     val running = runState == EditorRunState.Running
 
@@ -130,10 +154,16 @@ private fun LeanEditorScreen(onCheck: (String, (EditorRunState) -> Unit) -> Unit
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Main.lean", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                sources.keys.forEach { path ->
+                    Button(onClick = { activePath = path }, enabled = !running && activePath != path) {
+                        Text(path.substringAfterLast('/'))
+                    }
+                }
+            }
             OutlinedTextField(
-                value = source,
-                onValueChange = { source = it },
+                value = sources.getValue(activePath),
+                onValueChange = { sources = sources + (activePath to it) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -147,17 +177,27 @@ private fun LeanEditorScreen(onCheck: (String, (EditorRunState) -> Unit) -> Unit
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Button(
+                    modifier = Modifier.weight(1f),
                     enabled = !running,
                     onClick = {
                         runState = EditorRunState.Running
-                        onCheck(source) { runState = it }
+                        onCheck(sources) { runState = it }
                     },
                 ) {
-                    Text(if (running) "Checking…" else "Check Lean")
+                    Text(if (running) "Working…" else "Build project")
+                }
+                Button(
+                    modifier = Modifier.weight(1f),
+                    enabled = !running,
+                    onClick = {
+                        runState = EditorRunState.Running
+                        onVerifyRuntime { runState = it }
+                    },
+                ) {
+                    Text("Verify runtime")
                 }
                 if (running) {
                     CircularProgressIndicator()
-                    Text("Installing or checking…")
                 }
             }
             OutputPanel(runState)
@@ -169,9 +209,10 @@ private fun LeanEditorScreen(onCheck: (String, (EditorRunState) -> Unit) -> Unit
 private fun OutputPanel(state: EditorRunState) {
     val output = when (state) {
         EditorRunState.Idle -> "Edit the source and tap Check Lean."
-        EditorRunState.Running -> "Waiting for Lean…"
+        EditorRunState.Running -> "Working…"
         is EditorRunState.Failed -> "Could not run Lean:\n${state.message}"
         is EditorRunState.Finished -> formatResult(state.result, state.elapsed)
+        is EditorRunState.IntegrityFinished -> formatIntegrityResult(state.problems, state.elapsed)
     }
     Surface(
         modifier = Modifier
@@ -189,6 +230,16 @@ private fun OutputPanel(state: EditorRunState) {
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             )
         }
+    }
+}
+
+internal fun formatIntegrityResult(problems: List<String>, elapsed: Duration): String = buildString {
+    append("Runtime integrity • ${elapsed.inWholeMilliseconds} ms\n\n")
+    if (problems.isEmpty()) {
+        append("All packaged runtime files match the installed manifest.")
+    } else {
+        append("Integrity check found ${problems.size} problem(s):\n")
+        problems.forEach { append("• $it\n") }
     }
 }
 

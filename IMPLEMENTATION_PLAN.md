@@ -92,7 +92,7 @@ Prove these independently, in this order:
 - cancellation terminates the server and all child processes.
 - the same operations work after a cold restart and with paths containing spaces and non-ASCII characters.
 - app update refreshes all executable-layout symlinks after Android changes the randomized native-library path;
-- first install, interrupted install, low-storage recovery, and corrupted split module artifacts fail atomically and readably; and
+- first install, interrupted install, and corrupted split module artifacts fail atomically and readably; insufficient storage is rejected up front with a readable required/available-space message; and
 - the process environment works without a shell, inherited host variables, or network access.
 
 `lake build` may invoke a C compiler for executable or native targets. Treat proof checking and Lean library builds as the MVP. Shipping an NDK-based `leanc` workflow is a separate capability and must not block editor/LSP delivery.
@@ -250,7 +250,7 @@ Install into a staging directory, verify signature/hash/version/free-space, then
 
 Exit: clean CI builds an APK and records reproducible inputs.
 
-### M1 — Android Lean runtime feasibility (in progress; reference-device execution proven)
+### M1 — Android Lean runtime feasibility (complete on the API-33 reference device)
 
 - Produce the arm64 Android Lean runtime/toolchain.
 - Package executable code in the APK-native location and data in a versioned sysroot.
@@ -268,28 +268,34 @@ Exit: a fresh offline install checks valid/invalid Lean files, builds a local Le
 - [x] Create/refresh Lean/Lake compatibility symlinks and reject absent/stale links in health checks.
 - [x] Detect and repair APK/native-directory changes independently of immutable sysroot data installation; validated by update-install on the API-33 reference tablet.
 - [x] Add schema-2 marker migration bound to the complete packaged manifest digest; stream-verify every installed runtime file once during install/migration, retain fast routine health checks, and fall through to staged repair when legacy/schema-1 verification fails.
-- Add instrumented interrupted-activation, low-storage, complete corruption, and cold-update tests.
-- Record an ADR for the child-process decision, Bionic heap-tagging compromise, and upstream patch maintenance.
+- [x] Add deterministic host coverage for interrupted activation and rollback recovery, including a failed rollback rename.
+- [x] Validate a physical complete-facet corruption, staged replacement, cold APK update/link refresh, post-repair full audit, and Lean/LSP operation on the API-33 reference tablet.
+- [x] Validate physical process interruption with a complete-but-unmarked staging tree, restart cleanup, restaging, schema-2 activation, and Lean execution.
+- [x] Keep non-destructive free-space preflight and readable storage errors; defer manufactured low-storage pressure beyond the MVP.
+- [x] Record an ADR for the child-process decision, Bionic heap-tagging compromise, upstream patch maintenance, and supported capability boundary.
 
 Exit: install, restart, APK replacement, and interrupted migration tests all recover automatically; no UI code constructs native command paths or environments.
 
 ### M1.6 — Core toolchain delivery spike
 
-- Measure compressed APK/AAB size and installed footprint with all required split module facets.
-- Prototype Play asset delivery and an independent signed data-pack installer behind one interface.
-- Prototype streaming extraction/hash validation and quantify peak temporary disk usage and install duration.
-- Investigate a smaller Lean artifact build only as an optimization experiment, with the complete conformance/LSP suite as the correctness gate.
-- Decide base-APK versus asset-pack contents and document store/repository limits.
+- [x] Record the monolithic debug-APK baseline, separating native code and runtime data and breaking compressed/uncompressed runtime size down by artifact facet.
+- [x] Measure the monolithic APK, Play asset-pack AAB, independent pack, and installed footprint with all required split module facets.
+- [x] Prototype install-time Play Asset Delivery and an independent RSA-signed data-pack source behind one streaming installer interface.
+- [x] Stream-install and hash-verify the complete 14,864-file signed pack; quantify staging/rollback peak temporary disk requirements and timing boundaries.
+- [x] Defer a smaller Lean artifact build: both delivery channels are viable without weakening the conformance-proven split-facet runtime.
+- [x] Keep executable/native entries in base, put runtime data plus its manifest in one install-time asset pack or signed ZIP, and document current limits and release-time revalidation.
 
 Exit: at least one viable Play path and one viable independent-distribution path install the full core toolchain within documented storage/time budgets. If neither is viable, revisit the supported Lean artifact model before product UI work.
 
 ### M2 — Project runner and durable process service
 
-- Add project templates and version compatibility checks on top of the hardened toolchain installer.
-- Implement create/list/open, atomic save, `lake lean`, and supported `lake build`.
-- Add structured job output, cancellation/process-tree cleanup, error states, and basic import/export.
-- Put long-running process ownership in a reconnectable bound/foreground service.
-- Explicitly reject unsupported Git/network/native-target workflows before Lake attempts them.
+- [x] Add a two-module template and strict schema/toolchain compatibility checks on top of the hardened installer.
+- [x] Implement create/list/open/delete, monotonic atomic save, `lake lean`, and supported `lake build`.
+- [x] Add bounded structured job output, cancellation/cleanup states, errors, and traversal-safe atomic ZIP import/export.
+- [x] Put LSP and project job ownership in reconnectable, non-exported bound services; defer foreground promotion until background jobs become user-visible.
+- [x] Reject Git/network dependencies, executable/native targets, and shell download workflows before Lake attempts them.
+- [x] Add a simple two-tab Compose editor that saves both modules and builds the project.
+- [x] Pass the offline API-33 instrumentation exit scenario against the final migration-fix APK (6.791s) and verify no residual Lean/Lake process.
 
 Exit: an instrumentation test creates a two-module project, catches an error, fixes it, builds it, exports it, deletes it, and reimports it offline.
 
@@ -313,7 +319,7 @@ Exit: automated protocol tests plus a device scenario demonstrate correct diagno
 ### M5 — Mathlib beta (duration determined by size/performance spike)
 
 - Produce and verify a version-matched Mathlib pack.
-- Add pack install/remove/status UI and low-storage recovery.
+- Add pack install/remove/status UI, capacity reporting, and recoverable install-failure handling.
 - Profile memory, import latency, goal latency, and thermal behavior on a mid-range device.
 
 Exit: representative Mathlib files work offline without process death, and the distribution method meets store and license requirements.
@@ -321,7 +327,7 @@ Exit: representative Mathlib files work offline without process death, and the d
 ### M6 — Hardening and beta release (3–5 weeks)
 
 - Threat-model imported ZIPs/projects, WebView bridge, native processes, and package manifests.
-- Run compatibility, soak, cancellation, corruption, low-storage, and process-death tests.
+- Run compatibility, soak, cancellation, corruption, and process-death tests; treat manufactured low-storage pressure as a stretch hardening case.
 - Add crash reporting with opt-in/privacy controls, onboarding, licenses, backup policy, and a support bundle exporter.
 - Publish known limitations and supported Lean/package versions.
 - Test API 29 and current Android, multi-user/profile behavior, APK path migration, USB-independent production flows, and all supported delivery channels.
@@ -350,7 +356,7 @@ The device-confirmed visual editor is a continuous acceptance baseline, not a di
 - stdin/stdout/stderr backpressure and cancellation;
 - LSP initialize/edit/diagnostics/shutdown transcripts;
 - cold install, upgrade, corrupted toolchain, and interrupted pack install;
-- low storage, app backgrounding, activity recreation, and app process death; and
+- app backgrounding, activity recreation, and app process death; optionally add manufactured low-storage pressure in the hardening lane; and
 - IME, Unicode, hardware keyboard, TalkBack, and large source files.
 
 ### Toolchain conformance suite
@@ -396,11 +402,11 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Connect the tested framing/document-version layer to app-owned long-lived server state; retain the passing automated `lake serve` initialize/registration/did-open/diagnostics/shutdown/exit and forced-cleanup device cases.
-2. Instrument interrupted activation, low-storage, schema-1 corruption repair, cold update, offline behavior, and peak-RSS/first-diagnostic/install-time measurements on the API-33 reference tablet; add an explicit user-triggered schema-2 integrity recheck rather than hashing on every editor Check.
-3. Add API-29 and current-Android physical/emulator coverage; retain the passing version, valid/invalid, Unicode, Lake build/lean, LSP, cold-restart, termination, and visual-editor cases.
-4. Run the M1.6 delivery prototypes using the measured 803.7 MB debug APK and approximately 2.18 GB writable sysroot, then select release-channel packaging before expanding into project/editor features.
-5. Close M1 with an ADR for child processes, Bionic heap-tagging behavior, sysroot/layout patches, and the supported process/tool capability boundary.
+1. Begin M3 durable editor state: bind the Activity to retained services, persist tabs/dirty buffers across recreation, and add file-tree operations around `LeanProjectRepository`.
+2. Connect editor document changes to `LeanLspService`, preserving generation-aware reconnection, one reader, stale-diagnostic rejection, and restart controls.
+3. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+4. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle and M1 conformance/performance cases.
+5. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 

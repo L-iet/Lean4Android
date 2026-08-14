@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import select
 import subprocess
 import sys
@@ -107,6 +108,27 @@ def wait_for(
             raise TimeoutError(f"timed out waiting for {description}")
 
 
+def lean_lake_memory_kib(adb_path: Path) -> tuple[int, int]:
+    result = adb(adb_path, "shell", "ps", "-A", "-o", "PID,RSS,NAME", check=False)
+    rss_total = 0
+    pss_total = 0
+    for line in result.stdout.decode(errors="replace").splitlines()[1:]:
+        fields = line.split(None, 2)
+        if len(fields) != 3:
+            continue
+        pid, rss, name = fields
+        if name.rsplit("/", 1)[-1] in {"lean", "lake", "liblean_exe.so", "liblake_exe.so"}:
+            try:
+                rss_total += int(rss)
+            except ValueError:
+                pass
+            meminfo = adb(adb_path, "shell", "dumpsys", "meminfo", pid, check=False)
+            match = re.search(rb"TOTAL PSS:\s+(\d+)", meminfo.stdout)
+            if match:
+                pss_total += int(match.group(1))
+    return rss_total, pss_total
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--adb", type=Path, default=Path(".android-sdk/platform-tools/adb"))
@@ -142,6 +164,7 @@ def main() -> int:
         "LAKE_HOME": SYSROOT,
         "LAKE_OVERRIDE_LEAN": "true",
     }
+    launch_started = time.monotonic()
     process = subprocess.Popen(
         [
             str(args.adb),
@@ -164,6 +187,23 @@ def main() -> int:
     stderr_chunks: list[bytes] = []
     stderr_thread = threading.Thread(target=lambda: stderr_chunks.append(process.stderr.read()), daemon=True)
     stderr_thread.start()
+    sampling = threading.Event()
+    peak_rss_kib = [0]
+    peak_pss_kib = [0]
+
+    def sample_memory() -> None:
+        while not sampling.is_set():
+            rss_kib, pss_kib = lean_lake_memory_kib(args.adb)
+            peak_rss_kib[0] = max(peak_rss_kib[0], rss_kib)
+            peak_pss_kib[0] = max(peak_pss_kib[0], pss_kib)
+            sampling.wait(0.1)
+
+    rss_thread = threading.Thread(target=sample_memory, daemon=True)
+    rss_thread.start()
+
+    def stop_sampling() -> None:
+        sampling.set()
+        rss_thread.join(timeout=2.0)
 
     root_uri = "file://" + PROJECT
     document_uri = root_uri + "/Main.lean"
@@ -185,6 +225,7 @@ def main() -> int:
         )
         if "result" not in initialize:
             raise AssertionError(f"initialize failed: {initialize}")
+        initialize_ms = round((time.monotonic() - launch_started) * 1000)
 
         process.stdin.write(frame({"jsonrpc": "2.0", "method": "initialized", "params": None}))
         process.stdin.flush()
@@ -212,8 +253,17 @@ def main() -> int:
             )
             if remaining.stdout.strip():
                 raise AssertionError(f"orphaned Lean/Lake processes: {remaining.stdout.decode().strip()}")
-            print(json.dumps({"initialize": "ok", "forcedTransportStop": "ok", "orphanProcesses": 0}, indent=2))
+            stop_sampling()
+            print(json.dumps({
+                "initialize": "ok",
+                "initializeMs": initialize_ms,
+                "peakLeanLakeRssKiB": peak_rss_kib[0],
+                "peakLeanLakePssKiB": peak_pss_kib[0],
+                "forcedTransportStop": "ok",
+                "orphanProcesses": 0,
+            }, indent=2))
             return 0
+        did_open_started = time.monotonic()
         process.stdin.write(frame({
             "jsonrpc": "2.0",
             "method": "textDocument/didOpen",
@@ -233,6 +283,9 @@ def main() -> int:
         published = diagnostics["params"].get("diagnostics", [])
         if not published:
             raise AssertionError(f"invalid Lean source produced no diagnostics: {diagnostics}")
+        first_diagnostic_ms = round((time.monotonic() - did_open_started) * 1000)
+        launch_to_diagnostic_ms = round((time.monotonic() - launch_started) * 1000)
+        stop_sampling()
 
         process.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": None}))
         process.stdin.flush()
@@ -253,13 +306,19 @@ def main() -> int:
             raise AssertionError(f"server exited {exit_code}")
         print(json.dumps({
             "initialize": "ok",
+            "initializeMs": initialize_ms,
             "diagnosticCount": len(published),
+            "firstDiagnosticMs": first_diagnostic_ms,
+            "launchToDiagnosticMs": launch_to_diagnostic_ms,
+            "peakLeanLakeRssKiB": peak_rss_kib[0],
+            "peakLeanLakePssKiB": peak_pss_kib[0],
             "firstDiagnostic": published[0].get("message", ""),
             "shutdown": "ok",
             "exitCode": exit_code,
         }, ensure_ascii=False, indent=2))
         return 0
     finally:
+        stop_sampling()
         if process.stdin and not process.stdin.closed:
             process.stdin.close()
         try:

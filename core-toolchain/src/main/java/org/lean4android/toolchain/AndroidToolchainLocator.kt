@@ -5,14 +5,15 @@ import org.lean4android.model.ToolchainHealth
 import org.lean4android.model.ToolchainId
 import org.lean4android.model.ToolchainLayout
 import java.io.File
-import java.io.FileOutputStream
 
 class AndroidToolchainLocator(private val context: Context) {
+    private val activation = ToolchainActivation()
+
     fun installSysroot(): File {
         val destination = context.noBackupFilesDir.resolve("toolchains/${BuildConfig.TOOLCHAIN_ID}")
         val staging = destination.resolveSibling("${destination.name}.installing")
         val previous = destination.resolveSibling("${destination.name}.previous")
-        staging.deleteRecursively()
+        staging.deleteTreeWithoutFollowingLinks()
         val manifest = readRuntimeManifest()
 
         if (ToolchainInstallationState.isLegacyMarker(destination, BuildConfig.TOOLCHAIN_ID)) {
@@ -22,18 +23,20 @@ class AndroidToolchainLocator(private val context: Context) {
             verifyAndMarkIfHealthy(destination, manifest)
         }
         if (installationProblems(destination).isEmpty()) {
-            previous.deleteRecursively()
+            previous.deleteTreeWithoutFollowingLinks()
             ToolchainLayoutAdapter.refresh(layout(destination))
             return destination
         }
 
-        restorePreviousIfHealthy(destination, previous)
+        activation.restorePreviousIfHealthy(destination, previous, ::installationProblems)
         if (installationProblems(destination).isNotEmpty()) {
             ToolchainStoragePreflight.problem(
                 availableBytes = context.noBackupFilesDir.usableSpace,
                 payloadBytes = BuildConfig.PACKAGED_SYSROOT_BYTES,
             )?.let(::error)
-            copyAssetDirectory("toolchain", staging)
+            ApkAssetRuntimePayloadSource(context.assets).use { source ->
+                RuntimePayloadInstaller().install(source, staging, manifest)
+            }
             val stagingProblems = ToolchainInstallationState.problems(
                 staging,
                 BuildConfig.TOOLCHAIN_ID,
@@ -47,7 +50,7 @@ class AndroidToolchainLocator(private val context: Context) {
                 BuildConfig.TOOLCHAIN_ID,
                 BuildConfig.RUNTIME_MANIFEST_SHA256,
             )
-            activate(staging, destination, previous)
+            activation.activate(staging, destination, previous)
         }
         ToolchainLayoutAdapter.refresh(layout(destination))
         return destination
@@ -68,10 +71,12 @@ class AndroidToolchainLocator(private val context: Context) {
         return if (problems.isEmpty()) ToolchainHealth.Ready(layout) else ToolchainHealth.Missing(problems)
     }
 
-    private fun restorePreviousIfHealthy(destination: File, previous: File) {
-        if (installationProblems(previous).isNotEmpty()) return
-        destination.deleteRecursively()
-        check(previous.renameTo(destination)) { "Could not restore previous Lean sysroot" }
+    /** Explicit slow-path audit. Normal startup and editor checks intentionally use fast health checks. */
+    fun verifyInstalledRuntime(): List<String> {
+        val sysroot = context.noBackupFilesDir.resolve("toolchains/${BuildConfig.TOOLCHAIN_ID}")
+        val fastProblems = installationProblems(sysroot)
+        if (fastProblems.isNotEmpty()) return fastProblems
+        return ToolchainRuntimeVerifier().problems(sysroot, readRuntimeManifest())
     }
 
     private fun installationProblems(root: File) = ToolchainInstallationState.problems(
@@ -99,18 +104,6 @@ class AndroidToolchainLocator(private val context: Context) {
         return true
     }
 
-    private fun activate(staging: File, destination: File, previous: File) {
-        previous.deleteRecursively()
-        if (destination.exists()) {
-            check(destination.renameTo(previous)) { "Could not preserve previous Lean sysroot" }
-        }
-        if (!staging.renameTo(destination)) {
-            if (previous.exists()) previous.renameTo(destination)
-            error("Could not activate Lean sysroot")
-        }
-        previous.deleteRecursively()
-    }
-
     private fun layout(sysroot: File): ToolchainLayout {
         val nativeDirectory = context.applicationInfo.nativeLibraryDir
             ?.let(::File)
@@ -128,19 +121,4 @@ class AndroidToolchainLocator(private val context: Context) {
         is ToolchainHealth.Missing -> health.problems.joinToString(separator = "\n", prefix = "Not ready:\n• ")
     }
 
-    private fun copyAssetDirectory(assetPath: String, destination: File) {
-        val children = context.assets.list(assetPath)
-            ?: error("Could not list packaged asset $assetPath")
-        if (children.isEmpty()) {
-            destination.parentFile?.mkdirs()
-            context.assets.open(assetPath).use { input ->
-                FileOutputStream(destination).use(input::copyTo)
-            }
-            return
-        }
-        destination.mkdirs()
-        for (child in children) {
-            copyAssetDirectory("$assetPath/$child", destination.resolve(child))
-        }
-    }
 }

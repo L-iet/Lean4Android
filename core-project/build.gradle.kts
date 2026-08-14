@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "org.lean4android.lsp"
+    namespace = "org.lean4android.project"
     compileSdk = 36
     defaultConfig { minSdk = 29 }
     compileOptions {
@@ -14,12 +14,11 @@ android {
 }
 
 kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
+    compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
 }
 
 dependencies {
     implementation(project(":core-process"))
+    implementation(project(":core-toolchain"))
     testImplementation(libs.junit)
 }

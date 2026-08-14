@@ -51,4 +51,15 @@ class LeanEditorSupportTest {
         assertTrue(output.contains("Exit: -1 (timed out)"))
         assertTrue(output.contains("Lean produced no output."))
     }
+
+    @Test
+    fun `integrity result distinguishes success from reported corruption`() {
+        val success = formatIntegrityResult(emptyList(), 1_234.milliseconds)
+        val failure = formatIntegrityResult(listOf("Runtime file hash mismatch: lib/lean/Init.olean"), 5.milliseconds)
+
+        assertTrue(success.contains("Runtime integrity • 1234 ms"))
+        assertTrue(success.contains("All packaged runtime files match"))
+        assertTrue(failure.contains("found 1 problem(s)"))
+        assertTrue(failure.contains("Init.olean"))
+    }
 }

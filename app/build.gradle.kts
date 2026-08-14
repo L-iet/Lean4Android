@@ -8,6 +8,7 @@ val toolchainDistribution = rootProject.layout.projectDirectory.dir(
     "toolchain/output/lean-4.32.1-android1",
 )
 val generatedToolchain = layout.buildDirectory.dir("generated/toolchain")
+val playAssetDelivery = providers.gradleProperty("playAssetDelivery").map(String::toBoolean).orElse(false)
 
 val stageToolchainNative by tasks.registering(Sync::class) {
     from(toolchainDistribution.dir("native"))
@@ -82,8 +83,9 @@ android {
 
     sourceSets.named("main") {
         jniLibs.srcDir(generatedToolchain.map { it.dir("jniLibs") })
-        assets.srcDir(generatedToolchain.map { it.dir("assets") })
+        if (!playAssetDelivery.get()) assets.srcDir(generatedToolchain.map { it.dir("assets") })
     }
+    if (playAssetDelivery.get()) assetPacks += ":core_toolchain_pack"
 }
 
 tasks.named("preBuild").configure {
@@ -98,7 +100,9 @@ kotlin {
 
 dependencies {
     implementation(project(":core-model"))
+    implementation(project(":core-lsp"))
     implementation(project(":core-process"))
+    implementation(project(":core-project"))
     implementation(project(":core-toolchain"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.foundation)
@@ -108,4 +112,6 @@ dependencies {
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
