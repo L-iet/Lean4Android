@@ -307,6 +307,20 @@ Exit: an instrumentation test creates a two-module project, catches an error, fi
 
 Exit: a user can edit the two-module sample without losing changes across rotation or forced activity recreation.
 
+### M3.1 — IDE application shell and file workflow (pre-M4)
+
+- [ ] Replace the editor header with the Pydroid-inspired application shell specified in `docs/editor/M3_1_APP_SHELL_REQUIREMENTS.md`: hamburger/drawer control, active filename plus project-relative path, Run/Play, Files, and More icons.
+- [ ] Implement accessible anchored icon menus: Files exposes New/Open/Save/Save As/Close, and More exposes Undo/Redo/Find, with icon-plus-text rows and truthful enabled states/focus. Each closes on outside click, Back/Escape, item selection, or opening the other menu; only one popup may be open.
+- [ ] Add atomic Save without build; replace the visible Rename workflow with real Save As semantics that retains the original; add safe tab Close with Save/Discard/Cancel handling and a usable empty-editor state.
+- [ ] Implement the full-screen Open workspace flow in `docs/editor/M3_1_OPEN_WORKSPACE_REQUIREMENTS.md`: Recent, My Projects, Import Project Archive, Import Project Folder, Open Lean File, and New Project.
+- [ ] Keep SAF as an import/export boundary: safely stage and activate archives/folders; open a single Lean file as a generated scratch project or add it to a selected project; never run Lake against provider URIs or external pseudo paths.
+- [ ] Move the hierarchical file tree into a collapsible **Project** drawer section; place Build project and Verify runtime in the drawer, close it on outside click/Back/hamburger, and keep its structure extensible for later Settings and other destinations.
+- [ ] Make Run/Play save, build, and execute the supported offline Lean project entry behavior with bounded output/cancellation while preserving the no-network, no-native-target, no-terminal boundary.
+- [ ] Replace the Find surface's Close Search text with an accessible X icon, change Ctrl-S to Save, and preserve existing undo/redo/find shortcuts and recovery behavior.
+- [ ] Validate anchored menus, drawer/tree expansion, Save/Save As/Close, Run, adaptive phone/tablet portrait/landscape behavior, keyboard/focus, accessibility, recreation, and no-orphan cleanup on a physical device.
+
+Exit: a user can navigate the project from the drawer; open recent/internal projects; safely import a project archive/folder or one Lean file; manage files from conventional anchored menus; save without building; Save As without losing the original; close safely; and run the supported project flow from the top bar on phone and tablet. M4 does not begin until this exit is device-proven.
+
 ### M4 — Interactive Lean experience (4–6 weeks)
 
 - Implement LSP lifecycle, document sync, live diagnostics, hover, completion, and go-to-definition.
@@ -402,11 +416,14 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Begin M4 by connecting editor document changes to `LeanLspService`, preserving generation-aware reconnection, one reader, stale-diagnostic rejection, and restart controls.
-2. Add live version-filtered diagnostics and the first cursor-synchronized goals/messages surface without weakening the completed M3 recovery behavior.
-3. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
-4. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle and M1 conformance/performance cases.
-5. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
+1. Complete M3.1's top app bar, anchored Files/More menus, extensible navigation drawer, explicit Save/Save As/Close workflows, and inline-search X control.
+2. Implement and validate the Open workspace flow for Recent/My Projects, safe SAF project archive/folder import, and standalone/add-to-project Lean-file import into stable internal workspaces.
+3. Complete and device-validate Run/Play save-build-run behavior plus adaptive, keyboard, accessibility, recreation, cancellation, and orphan-process acceptance.
+4. Only after M3.1 exits, begin M4 by connecting editor document changes to `LeanLspService`, preserving generation-aware reconnection, one reader, stale-diagnostic rejection, and restart controls.
+5. Add live version-filtered diagnostics and the first cursor-synchronized goals/messages surface without weakening the completed M3/M3.1 recovery and file-workflow behavior.
+6. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+7. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle and M1 conformance/performance cases.
+8. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 
