@@ -62,4 +62,10 @@ class LeanEditorSupportTest {
         assertTrue(failure.contains("found 1 problem(s)"))
         assertTrue(failure.contains("Init.olean"))
     }
+
+    @Test
+    fun `line numbers cover empty text and every logical line`() {
+        assertEquals("1", editorLineNumbers(""))
+        assertEquals("1\n2\n3", editorLineNumbers("first\nsecond\n"))
+    }
 }

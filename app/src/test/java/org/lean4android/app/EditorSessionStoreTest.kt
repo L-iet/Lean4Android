@@ -56,4 +56,17 @@ class EditorSessionStoreTest {
         val removed = added.remove("Third.lean")
         assertEquals("Basic.lean", removed.activePath)
     }
+
+    @Test fun `save as retains original and close permits empty editor`() {
+        val initial = EditorSessionState(
+            "sample", listOf(EditorTab("Main.lean", "saved", "edited")), "Main.lean",
+        )
+        val copied = initial.saveAs("Main.lean", "Copy.lean")
+        assertEquals(listOf("Main.lean", "Copy.lean"), copied.tabs.map(EditorTab::path))
+        assertTrue(copied.tabs.first().dirty)
+        assertFalse(copied.tabs.last().dirty)
+        val empty = copied.remove("Copy.lean").remove("Main.lean")
+        assertTrue(empty.tabs.isEmpty())
+        assertEquals(null, empty.activePath)
+    }
 }

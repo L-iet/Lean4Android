@@ -91,6 +91,37 @@ class LeanProjectRepositoryTest {
         expectFailure("at least one") { repository.deleteSource("sample", "Sample/Basic.lean") }
     }
 
+    @Test fun saveAsRetainsOriginalAndRejectsCaseFoldedCollision() {
+        val repository = LeanProjectRepository(temporary.newFolder("projects"), "toolchain")
+        repository.create("sample")
+        repository.copySource("sample", "Main.lean", "Copies/MainCopy.lean", "def copied := 7\n")
+        assertTrue(repository.read("sample", "Main.lean").contains("import"))
+        assertEquals("def copied := 7\n", repository.read("sample", "Copies/MainCopy.lean"))
+        expectFailure("case-insensitive") {
+            repository.createSource("sample", "copies/maincopy.lean")
+        }
+    }
+
+    @Test fun folderAndStandaloneImportsActivateOnlyValidatedCopies() {
+        val root = temporary.newFolder("projects")
+        val repository = LeanProjectRepository(root, "toolchain")
+        val sourceRoot = temporary.newFolder("folder")
+        LeanProjectRepository(temporary.newFolder("builder"), "toolchain").create("source").directory
+            .copyRecursively(sourceRoot, overwrite = true)
+        val imported = repository.importFolder("folder_copy", sourceRoot)
+        assertEquals(2, imported.sourceFiles.size)
+
+        val lean = temporary.root.resolve("Chosen.lean").apply { writeText("def chosen := 9\n") }
+        val scratch = repository.importStandalone("scratch", "Chosen.lean", lean)
+        assertEquals("def chosen := 9\n", repository.read(scratch.id, "Chosen.lean"))
+        assertTrue(repository.read(scratch.id, "Main.lean").contains("import"))
+
+        val hostile = temporary.newFolder("hostile").apply { resolve("lakefile.toml").writeText("require x from git \"https://bad\"") }
+        expectFailure("metadata is missing") { repository.importFolder("bad", hostile) }
+        assertFalse(root.resolve("bad").exists())
+        assertFalse(root.resolve(".bad.importing").exists())
+    }
+
     private fun expectFailure(message: String, block: () -> Unit) {
         try {
             block()

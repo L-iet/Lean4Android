@@ -100,7 +100,19 @@ class LeanProjectRepository(
         val project = open(projectId)
         val destination = resolveContained(project.directory, relativePath)
         require(destination.extension == "lean") { "Only Lean source files can be created" }
-        require(!destination.exists()) { "Lean source already exists: $relativePath" }
+        requireNoCaseFoldedCollision(project, relativePath)
+        atomicWrite(destination, contents)
+        return open(projectId)
+    }
+
+    /** Save As: creates a new source with the supplied bytes and leaves the original untouched. */
+    fun copySource(projectId: String, sourcePath: String, destinationPath: String, contents: String): LeanProject {
+        val project = open(projectId)
+        val source = resolveContained(project.directory, sourcePath)
+        require(source.isFile && source.extension == "lean") { "Lean source does not exist: $sourcePath" }
+        val destination = resolveContained(project.directory, destinationPath)
+        require(destination.extension == "lean") { "Only Lean source files can be created" }
+        requireNoCaseFoldedCollision(project, destinationPath)
         atomicWrite(destination, contents)
         return open(projectId)
     }
@@ -111,7 +123,7 @@ class LeanProjectRepository(
         val destination = resolveContained(project.directory, newPath)
         require(source.isFile && source.extension == "lean") { "Lean source does not exist: $oldPath" }
         require(destination.extension == "lean") { "Only Lean source files can be renamed" }
-        require(!destination.exists()) { "Lean source already exists: $newPath" }
+        requireNoCaseFoldedCollision(project, newPath, oldPath)
         destination.parentFile?.mkdirs()
         Files.move(source.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
         removeEmptyParents(source.parentFile, project.directory)
@@ -191,6 +203,71 @@ class LeanProjectRepository(
         return open(id)
     }
 
+    /** Imports a provider-staged directory as data into a new app-managed project. */
+    fun importFolder(id: String, source: File): LeanProject {
+        validateId(id)
+        require(source.isDirectory) { "Project folder does not exist" }
+        val destination = root.resolve(id)
+        require(!destination.exists()) { "Project already exists: $id" }
+        val staging = root.resolve(".$id.importing")
+        deleteTree(staging)
+        staging.mkdirs()
+        try {
+            var count = 0
+            var total = 0L
+            val folded = hashSetOf<String>()
+            Files.walkFileTree(source.toPath(), object : java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                override fun preVisitDirectory(dir: java.nio.file.Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult {
+                    require(!attrs.isSymbolicLink) { "Project folders cannot contain symbolic links" }
+                    if (dir != source.toPath()) resolveContained(staging, source.toPath().relativize(dir).toString()).mkdirs()
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+                override fun visitFile(file: java.nio.file.Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult {
+                    require(attrs.isRegularFile && !attrs.isSymbolicLink) { "Project folders may contain only regular files" }
+                    require(++count <= 10_000) { "Project folder has too many entries" }
+                    val relative = source.toPath().relativize(file).toString().replace(File.separatorChar, '/')
+                    require(folded.add(relative.lowercase())) { "Duplicate case-folded project path: $relative" }
+                    val size = attrs.size()
+                    require(size <= 64L * 1024 * 1024) { "Project file exceeds 64 MiB: $relative" }
+                    total += size
+                    require(total <= 256L * 1024 * 1024) { "Project folder expands beyond 256 MiB" }
+                    val output = resolveContained(staging, relative)
+                    output.parentFile?.mkdirs()
+                    Files.copy(file, output.toPath())
+                    return java.nio.file.FileVisitResult.CONTINUE
+                }
+            })
+            validateMetadata(staging)
+            validateSupportedWorkflow(staging)
+            Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (failure: Throwable) {
+            deleteTree(staging)
+            throw failure
+        }
+        return open(id)
+    }
+
+    fun importStandalone(id: String, filename: String, source: File): LeanProject {
+        require(source.isFile) { "Lean source does not exist" }
+        require(source.length() <= 8L * 1024 * 1024) { "Lean source exceeds 8 MiB" }
+        val project = create(id)
+        return try {
+            val path = filename.takeIf { it.endsWith(".lean") } ?: "Main.lean"
+            if (path == "Main.lean") save(id, path, source.readText())
+            else createSource(id, path, source.readText())
+            open(id)
+        } catch (failure: Throwable) {
+            deleteTree(project.directory)
+            throw failure
+        }
+    }
+
+    fun importSource(projectId: String, destinationPath: String, source: File): LeanProject {
+        require(source.isFile) { "Lean source does not exist" }
+        require(source.length() <= 8L * 1024 * 1024) { "Lean source exceeds 8 MiB" }
+        return createSource(projectId, destinationPath, source.readText())
+    }
+
     fun lakeBuild(factory: ToolchainCommandFactory, id: String, timeout: Duration = 5.minutes): ProcessCommand {
         val project = open(id)
         return factory.lake(listOf("build"), project.directory, timeout)
@@ -223,6 +300,16 @@ class LeanProjectRepository(
 
     private fun validateId(id: String) {
         require(SAFE_ID.matches(id)) { "Project ID must be 1-64 safe filename characters" }
+    }
+
+    private fun requireNoCaseFoldedCollision(project: LeanProject, path: String, excluding: String? = null) {
+        val folded = path.lowercase()
+        require(project.sourceFiles.none { it != excluding && it.lowercase() == folded }) {
+            "Lean source already exists (case-insensitive): $path"
+        }
+        require(!resolveContained(project.directory, path).exists() || path == excluding) {
+            "Lean source already exists: $path"
+        }
     }
 
     private fun resolveContained(base: File, relativePath: String): File {

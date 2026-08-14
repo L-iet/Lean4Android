@@ -76,7 +76,7 @@ Scratch projects are real app-managed projects: they participate in Recent, reco
 
 - **Save** writes the active internal project file.
 - **Save As** creates another internal project file and retains the original.
-- **Export Project** writes a portable project archive through SAF.
+- **Export Project** writes a portable project archive through SAF. Its user-facing drawer workflow, dirty-buffer behavior, archive contract, limits, cleanup, and acceptance are specified by `../project/M3_3_PROJECT_EXPORT_REQUIREMENTS.md` and remain pending until M3.3 completes.
 - A future **Export Copy** may write one Lean file through SAF.
 
 Do not use Save As to imply a durable link to an external provider document. Imported files are copies. The UI warns that app-managed projects and scratch projects are removed on uninstall and offers export guidance without interrupting ordinary editing.

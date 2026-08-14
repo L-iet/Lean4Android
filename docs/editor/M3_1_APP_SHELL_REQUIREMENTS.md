@@ -34,7 +34,7 @@ Run/Play is the primary action and replaces the old prominent **Build project** 
 
 ## Navigation drawer
 
-The hamburger icon controls a left navigation drawer that works on compact and expanded layouts. Its first group is a collapsible **Project** section containing the hierarchical project file tree. The drawer also contains **Build project** and **Verify runtime** actions, with room for future destinations such as Settings without redesigning the editor top bar.
+The hamburger icon controls a left navigation drawer that works on compact and expanded layouts. Its first group is a collapsible **Project** section containing the hierarchical project file tree. The drawer also contains **Build project** and **Verify runtime** actions, with room for later destinations without redesigning the editor top bar. M3.2 subsequently added Settings; planned M3.3 adds **Export project** after project actions and before global Settings as specified in `../project/M3_3_PROJECT_EXPORT_REQUIREMENTS.md`.
 
 The drawer preserves expansion state across ordinary Activity recreation, clearly indicates the active file, and closes when the user taps/clicks outside it, presses Back/Escape, or activates the hamburger control again. Opening the drawer closes any attached top-bar menu. File-tree nodes and actions require accessible names, selected/expanded state, adequate touch targets, and keyboard traversal.
 

@@ -20,12 +20,13 @@ internal data class EditorTab(
 internal data class EditorSessionState(
     val projectId: String,
     val tabs: List<EditorTab>,
-    val activePath: String,
+    val activePath: String?,
 ) {
     init {
-        require(tabs.isNotEmpty()) { "An editor session needs at least one tab" }
         require(tabs.map(EditorTab::path).distinct().size == tabs.size) { "Editor tab paths must be unique" }
-        require(tabs.any { it.path == activePath }) { "The active editor path must be open" }
+        require((tabs.isEmpty() && activePath == null) || tabs.any { it.path == activePath }) {
+            "The active editor path must be open"
+        }
     }
 
     fun edit(path: String, contents: String): EditorSessionState = copy(
@@ -37,7 +38,9 @@ internal data class EditorSessionState(
         return copy(activePath = path)
     }
 
-    fun markSaved(): EditorSessionState = copy(tabs = tabs.map { it.copy(savedContents = it.contents) })
+    fun markSaved(path: String? = null): EditorSessionState = copy(
+        tabs = tabs.map { if (path == null || it.path == path) it.copy(savedContents = it.contents) else it },
+    )
 
     fun add(path: String, contents: String = ""): EditorSessionState {
         require(tabs.none { it.path == path }) { "Editor tab already exists: $path" }
@@ -53,14 +56,24 @@ internal data class EditorSessionState(
         )
     }
 
+    fun saveAs(oldPath: String, newPath: String): EditorSessionState {
+        val source = tabs.singleOrNull { it.path == oldPath } ?: error("Editor tab is not open: $oldPath")
+        require(tabs.none { it.path == newPath }) { "Editor tab already exists: $newPath" }
+        return copy(
+            tabs = tabs + source.copy(path = newPath, savedContents = source.contents),
+            activePath = newPath,
+        )
+    }
+
     fun remove(path: String): EditorSessionState {
-        require(tabs.size > 1) { "An editor session must keep at least one tab" }
         val index = tabs.indexOfFirst { it.path == path }
         require(index >= 0) { "Editor tab is not open: $path" }
         val remaining = tabs.filterNot { it.path == path }
         return copy(
             tabs = remaining,
-            activePath = if (activePath == path) remaining[minOf(index, remaining.lastIndex)].path else activePath,
+            activePath = if (remaining.isEmpty()) null else if (activePath == path) {
+                remaining[minOf(index, remaining.lastIndex)].path
+            } else activePath,
         )
     }
 }
@@ -69,7 +82,7 @@ internal data class EditorSessionState(
 internal class EditorSessionStore(private val snapshot: File) {
     companion object {
         private const val MAGIC = 0x4c344145 // L4AE
-        private const val SCHEMA = 1
+        private const val SCHEMA = 2
         private const val MAX_TABS = 256
         private const val MAX_TEXT_BYTES = 8 * 1024 * 1024
     }
@@ -97,7 +110,8 @@ internal class EditorSessionStore(private val snapshot: File) {
             output.writeInt(MAGIC)
             output.writeInt(SCHEMA)
             output.writeUTF(state.projectId)
-            output.writeUTF(state.activePath)
+            output.writeBoolean(state.activePath != null)
+            state.activePath?.let(output::writeUTF)
             output.writeInt(state.tabs.size)
             state.tabs.forEach { tab ->
                 output.writeUTF(tab.path)
@@ -121,9 +135,9 @@ internal class EditorSessionStore(private val snapshot: File) {
         return DataInputStream(BufferedInputStream(snapshot.inputStream())).use { input ->
             require(input.readInt() == MAGIC && input.readInt() == SCHEMA) { "Unsupported editor recovery snapshot" }
             val projectId = input.readUTF()
-            val activePath = input.readUTF()
+            val activePath = if (input.readBoolean()) input.readUTF() else null
             val count = input.readInt()
-            require(count in 1..MAX_TABS) { "Invalid editor tab count" }
+            require(count in 0..MAX_TABS) { "Invalid editor tab count" }
             val tabs = List(count) {
                 EditorTab(input.readUTF(), readText(input), readText(input))
             }
