@@ -4,7 +4,7 @@ These instructions apply to the entire repository. They complement the general a
 
 ## Start every work session from durable state
 
-1. Read `IMPLEMENTATION_HISTORY.md`, the relevant milestone and immediate-next-actions sections of `IMPLEMENTATION_PLAN.md`, and the relevant recipe in `MVP_AND_REBUILDING.md` before changing code or starting a long command.
+1. Read (the last few lines of) `IMPLEMENTATION_HISTORY.md`, the relevant milestone and immediate-next-actions sections of `IMPLEMENTATION_PLAN.md`, and the relevant recipe in `MVP_AND_REBUILDING.md` before changing code or starting a long command.
 2. Inspect `git status --short`. The worktree may contain user changes or generated recovery state. Preserve unrelated work and never infer that an untracked or modified file is disposable.
 3. Treat `IMPLEMENTATION_HISTORY.md` as the project's long-term operational memory. Generated files and old process IDs are not evidence of current state after a machine or WSL crash.
 4. Confirm whether a supposedly running build/process actually survived before resuming it. Inspect its output and artifacts, then resume incrementally when safe.
@@ -13,8 +13,8 @@ These instructions apply to the entire repository. They complement the general a
 
 The host machine sometimes crashes. Do not let important knowledge exist only in terminal output or chat context.
 
-- Add a dated entry or an explicit `Validation in progress`/checkpoint item to `IMPLEMENTATION_HISTORY.md` when beginning a substantial milestone, lengthy build, device migration, or multi-step investigation.
-- Update that entry regularly at meaningful boundaries: configuration completed, a new artifact was produced, a failure/root cause was identified, a device state was changed, or the next exact resume command became known. During a long-running task, do not wait until the end to record all progress.
+- Regularly add a dated entry or an explicit `Validation in progress`/checkpoint item to `IMPLEMENTATION_HISTORY.md` when beginning any task, lengthy build, device migration, or multi-step investigation. Do not wait until tasks are done to add to the implementation history. Add to the **end** of the file, not the beginning.
+- Update that entry regularly at meaningful boundaries: configuration completed, a new artifact was produced, a failure/root cause was identified, a device state was changed, or the next exact resume command became known. Do not wait until the end to record all progress.
 - A checkpoint must state what completed, what is still running (including command, job count, and relevant paths), what failed or remains unknown, what artifacts are trustworthy, and the exact next validation/resume step. Record whether any relevant process remains alive.
 - When the work completes, revise the in-progress entry into the completed state rather than leaving contradictory running-state prose. Record implementation, decisions, validation evidence, measurements/artifact hashes when material, device/network state, residual-process checks, and remaining boundary.
 - Do not claim success from compilation alone when the milestone requires APK, instrumentation, offline, migration, or physical-device evidence. Distinguish observed results from inferred or pending validation.
