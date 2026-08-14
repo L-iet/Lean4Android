@@ -74,6 +74,23 @@ class LeanProjectRepositoryTest {
         assertTrue(source.lastModified() >= before + 1_000L)
     }
 
+    @Test fun sourceFileOperationsStayContainedAndPreserveAtLeastOneSource() {
+        val repository = LeanProjectRepository(temporary.newFolder("projects"), "toolchain")
+        repository.create("sample")
+
+        repository.createSource("sample", "Extra/Nested.lean", "def nested := true\n")
+        assertEquals("def nested := true\n", repository.read("sample", "Extra/Nested.lean"))
+        val renamed = repository.renameSource("sample", "Extra/Nested.lean", "Extra/Renamed.lean")
+        assertTrue("Extra/Renamed.lean" in renamed.sourceFiles)
+        assertFalse("Extra/Nested.lean" in renamed.sourceFiles)
+        val afterDelete = repository.deleteSource("sample", "Extra/Renamed.lean")
+        assertFalse("Extra/Renamed.lean" in afterDelete.sourceFiles)
+
+        expectFailure("escapes") { repository.createSource("sample", "../Outside.lean") }
+        repository.deleteSource("sample", "Main.lean")
+        expectFailure("at least one") { repository.deleteSource("sample", "Sample/Basic.lean") }
+    }
+
     private fun expectFailure(message: String, block: () -> Unit) {
         try {
             block()

@@ -89,6 +89,45 @@ class LeanProjectRepository(
         atomicWrite(destination, contents)
     }
 
+    fun read(projectId: String, relativePath: String): String {
+        val project = open(projectId)
+        val source = resolveContained(project.directory, relativePath)
+        require(source.isFile && source.extension == "lean") { "Lean source does not exist: $relativePath" }
+        return source.readText()
+    }
+
+    fun createSource(projectId: String, relativePath: String, contents: String = "") : LeanProject {
+        val project = open(projectId)
+        val destination = resolveContained(project.directory, relativePath)
+        require(destination.extension == "lean") { "Only Lean source files can be created" }
+        require(!destination.exists()) { "Lean source already exists: $relativePath" }
+        atomicWrite(destination, contents)
+        return open(projectId)
+    }
+
+    fun renameSource(projectId: String, oldPath: String, newPath: String): LeanProject {
+        val project = open(projectId)
+        val source = resolveContained(project.directory, oldPath)
+        val destination = resolveContained(project.directory, newPath)
+        require(source.isFile && source.extension == "lean") { "Lean source does not exist: $oldPath" }
+        require(destination.extension == "lean") { "Only Lean source files can be renamed" }
+        require(!destination.exists()) { "Lean source already exists: $newPath" }
+        destination.parentFile?.mkdirs()
+        Files.move(source.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        removeEmptyParents(source.parentFile, project.directory)
+        return open(projectId)
+    }
+
+    fun deleteSource(projectId: String, relativePath: String): LeanProject {
+        val project = open(projectId)
+        require(project.sourceFiles.size > 1) { "A project must keep at least one Lean source file" }
+        val source = resolveContained(project.directory, relativePath)
+        require(source.isFile && source.extension == "lean") { "Lean source does not exist: $relativePath" }
+        Files.delete(source.toPath())
+        removeEmptyParents(source.parentFile, project.directory)
+        return open(projectId)
+    }
+
     fun delete(id: String) {
         val project = open(id)
         deleteTree(project.directory)
@@ -192,6 +231,16 @@ class LeanProjectRepository(
         val canonicalBase = base.canonicalFile
         require(result.toPath().startsWith(canonicalBase.toPath()) && result != canonicalBase) { "Project path escapes its root" }
         return result
+    }
+
+    private fun removeEmptyParents(start: File?, projectRoot: File) {
+        val root = projectRoot.canonicalFile
+        var directory = start?.canonicalFile
+        while (directory != null && directory != root && directory.toPath().startsWith(root.toPath())) {
+            if (directory.list().orEmpty().isNotEmpty()) return
+            Files.deleteIfExists(directory.toPath())
+            directory = directory.parentFile
+        }
     }
 
     private fun atomicWrite(destination: File, contents: String) {

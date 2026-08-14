@@ -301,9 +301,9 @@ Exit: an instrumentation test creates a two-module project, catches an error, fi
 
 ### M3 — Usable editor (3–5 weeks)
 
-- Complete the editor bake-off and record the choice.
-- Add file tree, tabs, dirty state, search, syntax highlighting, undo/redo, rename/delete, and recovery after activity/process recreation.
-- Support phone, tablet, portrait/landscape, hardware keyboard, and accessibility basics.
+- [x] Complete the editor bake-off and record the native Compose choice in `docs/editor/M3_EDITOR_DECISION.md`.
+- [x] Add file tree, tabs, dirty state, search, syntax highlighting, undo/redo, rename/delete, and recovery after activity/process recreation.
+- [x] Validate the adaptive phone/tablet portrait/landscape surface, hardware-keyboard commands, and accessibility basics on device.
 
 Exit: a user can edit the two-module sample without losing changes across rotation or forced activity recreation.
 
@@ -402,8 +402,8 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Begin M3 durable editor state: bind the Activity to retained services, persist tabs/dirty buffers across recreation, and add file-tree operations around `LeanProjectRepository`.
-2. Connect editor document changes to `LeanLspService`, preserving generation-aware reconnection, one reader, stale-diagnostic rejection, and restart controls.
+1. Begin M4 by connecting editor document changes to `LeanLspService`, preserving generation-aware reconnection, one reader, stale-diagnostic rejection, and restart controls.
+2. Add live version-filtered diagnostics and the first cursor-synchronized goals/messages surface without weakening the completed M3 recovery behavior.
 3. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
 4. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle and M1 conformance/performance cases.
 5. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
