@@ -81,7 +81,7 @@ The host machine sometimes crashes. Do not let important knowledge exist only in
 - Project/storage changes must preserve traversal protection, atomic/monotonic saves, bounded output, safe ZIP import/export, schema/toolchain checks, and rejection of unsupported network/native workflows.
 - LSP/service changes must preserve one-reader ownership, generation-aware reconnection, stale-version rejection, lifecycle ordering, bounded cleanup, activity recreation, and no orphan processes.
 - Keep measurements comparable: distinguish compressed delivery size, expanded sysroot size, rollback/staging headroom, cold versus warm latency/PSS, and aggregate RSS caveats.
-- For a final code handoff, run `git diff --check`, inspect `git diff` and `git status`, and document every test that actually ran plus anything that did not.
+- For a final code handoff, run `git diff --check`, inspect `git diff` and `git status`, and document every test that actually ran plus anything that did not. Perform any whitespace checks and then `git commit` at the end.
 
 ## Safety and repository hygiene
 

@@ -416,11 +416,39 @@ Exit: projects, files, and folders can be renamed or deleted from every requeste
 
 ### M5 — Mathlib beta (duration determined by size/performance spike)
 
+Execution plan: [`docs/delivery/M5_MATHLIB_INTEGRATION_PLAN.md`](docs/delivery/M5_MATHLIB_INTEGRATION_PLAN.md).
+
 - Produce and verify a version-matched Mathlib pack.
 - Add pack install/remove/status UI, capacity reporting, and recoverable install-failure handling.
 - Profile memory, import latency, goal latency, and thermal behavior on a mid-range device.
 
 Exit: representative Mathlib files work offline without process death, and the distribution method meets store and license requirements.
+
+### M5.1 — General project files and program streams
+
+- Generalize project creation, import/export, tree, tabs, recovery, rename/delete, and text editing from Lean-only files to bounded project-contained text files. Start with a plain-text fallback and explicit encoding/size/error handling; binary files may remain visible/exportable but must not be decoded as text.
+- Introduce a highlighter registry selected by file extension or detected content type, with plain text as the mandatory fallback. Keep Lean highlighting as the first registered language; additional language grammars are follow-up work rather than a prerequisite for opening a file.
+- Run supported Lean programs with the app-managed project root as their deterministic working directory so project-relative reads can address files visible in the tree. Preserve typed commands, a minimal deterministic environment, traversal-safe app operations, and the rule that this is not a shell or a per-project OS sandbox.
+- Replace the implicit always-empty stdin behavior with three explicit run modes: immediate EOF, interactive console, and bytes streamed from a selected project file. A child blocking on a pipe and arbitrary prompt text on stdout/stderr do not provide a reliable structured "input requested" signal, so interactive mode keeps a bounded input channel open and lets the user send text/lines or EOF without claiming automatic prompt detection.
+- Capture stdout and stderr as separate bounded streams while retaining a useful combined chronological Output view. Let users export the current stdout or stderr independently through SAF, and configure a contained project file as stdin without granting provider paths to Lean/Lake.
+- Define cancellation, backpressure, process-death, rotation/reconnection, EOF, repeated-run, dirty-input-file, and export-failure behavior before enabling the interactive UI. Do not allow blocked input to leave an orphan process.
+
+Exit: a project can safely contain and edit ordinary text files; a Lean program can read a project-relative file; EOF, interactive, and project-file stdin modes behave predictably; stdout/stderr remain bounded and separately exportable; and cancellation/recreation leave no child process or silent data loss.
+
+### M5.2 — Source navigation results
+
+- Change go-to-definition from Goals-panel location text to opening the target project file and placing the cursor at the returned UTF-16 line/column when the URI resolves to a contained, user-accessible project file. Retain a truthful non-navigable location display for toolchain, generated, or external targets.
+- Present find-references results in a bounded, accessible popup with project-relative path, line, and column; sort/deduplicate results and let each row open the file and move the cursor immediately.
+- Preserve dirty tabs, file identity, generation/document-version checks, cancellation, focus, Back/Escape behavior, and stale-result rejection across both navigation paths.
+
+Exit: definition and reference requests navigate directly to valid contained project locations, inaccessible targets degrade truthfully, and stale or malformed LSP locations cannot open an external path or move the cursor incorrectly.
+
+### M5.3 — Editor and interface preferences
+
+- Add **Settings → Editor** controls to show or hide the symbol row and customize its ordered contents, with validated persistence, restore-defaults behavior, accessible labels, and a supported maximum of 60 entries. Preserve horizontal scrolling and cursor/selection-aware insertion.
+- Add independently persisted editor-font and interface-font choices from documented fixed ranges. Apply changes immediately and revalidate pane clamping, tabs, dialogs, drawer reachability, line-number alignment, accessibility scaling, IME behavior, and configuration/process recreation.
+
+Exit: symbol-row visibility/content and both font-size settings are durable, bounded, accessible, and usable across supported phone/tablet layouts without regressing editing or pane reachability.
 
 ### M6 — Hardening and beta release (3–5 weeks)
 
@@ -431,6 +459,14 @@ Exit: representative Mathlib files work offline without process death, and the d
 - Test API 29 and current Android, multi-user/profile behavior, APK path migration, USB-independent production flows, and all supported delivery channels.
 
 Exit: signed beta passes the release test matrix with no critical data-loss, sandbox-escape, startup, or orphan-process bugs.
+
+### M7 — Post-beta editor depth
+
+- Implement Lean-style backslash abbreviation completion from a pinned, reviewed abbreviation data source. Conversion occurs only on the configured delimiter (initially Space), uses deterministic prefix resolution, supports multi-character replacements and `$CURSOR` placement, and forms one coherent undo edit without breaking IME composition, selections, or LSP versions.
+- Add word wrap only after the native editor can keep wrapped visual rows, the line-number gutter, selection/cursor geometry, diagnostic navigation, scrolling, IME visibility, and large-file performance consistent.
+- Add syntax highlighters to the M5.1 registry according to demonstrated demand; opening/editing a file must never depend on a grammar being installed.
+
+Exit: deferred editor features meet correctness, accessibility, performance, undo, and physical IME acceptance criteria without destabilizing the beta's plain-text fallback or Lean editing baseline.
 
 ## 6. Test strategy
 
@@ -443,7 +479,9 @@ The device-confirmed visual editor is a continuous acceptance baseline, not a di
 - environment construction and command argument handling;
 - manifest/hash/signature validation;
 - project path validation and hostile ZIP fixtures; and
-- state restoration and migration logic.
+- state restoration and migration logic;
+- generic text/binary classification, encoding and size limits, and highlighter-registry fallback; and
+- URI-to-contained-project location resolution plus bounded reference-result normalization.
 
 ### Android integration tests
 
@@ -452,6 +490,7 @@ The device-confirmed visual editor is a continuous acceptance baseline, not a di
 - compatibility-link creation, stale APK-path repair, and update migration;
 - deterministic Lean/Lake environment construction without inherited shell state;
 - stdin/stdout/stderr backpressure and cancellation;
+- explicit EOF/interactive/project-file stdin modes, separate bounded stdout/stderr capture, stream export, and input-wait recreation;
 - LSP initialize/edit/diagnostics/shutdown transcripts;
 - cold install, upgrade, corrupted toolchain, and interrupted pack install;
 - app backgrounding, activity recreation, and app process death; optionally add manufactured low-storage pressure in the hardening lane; and
@@ -484,6 +523,9 @@ CI should build and unit-test every change, build the pinned toolchain from scra
 | Editor bridge compromises files | Project/data exposure | Bundled content only, narrow typed bridge, disabled navigation/file access |
 | App update or crash loses work | User data loss | Atomic saves, recovery snapshots, migration rollback, import/export tests |
 | Android background limits kill builds | Interrupted operation | foreground service for user-visible long jobs; persistent job state and cancellation |
+| A blocked stdin read looks like a hung program | Confusing UI or orphaned child | Explicit run input mode and visible waiting/running state; send/EOF/cancel controls; never infer a prompt from arbitrary output |
+| General project files expose unintended paths or exhaust memory | Data exposure, crashes, or corrupt editing | Contained project resolution, deterministic working directory/environment, text/binary and encoding policy, per-file/aggregate limits, streamed import/export |
+| LSP navigation returns stale or external URIs | Wrong-file edits or path escape | Generation/version checks and canonical contained-project URI mapping; show non-navigable external locations without opening them |
 
 ## 8. Work that should wait until after beta
 
@@ -493,6 +535,8 @@ CI should build and unit-test every change, build the pinned toolchain from scra
 - a general terminal;
 - full Git client;
 - all Lean infoview widgets and custom package widgets;
+- Lean-style Unicode abbreviation completion and word wrap (planned for M7 after their input/cursor/layout invariants are designed);
+- bundled syntax grammars beyond the M5.1 plain-text fallback and existing Lean highlighter;
 - non-arm64 ABIs; and
 - collaborative/cloud editing.
 
@@ -501,9 +545,11 @@ These are valuable, but each expands the executable-code, package-management, UI
 ## 9. Immediate next actions
 
 1. Begin M5 with the version-matched offline Mathlib pack and measure capacity, recovery, latency, memory, and thermal behavior without regressing the completed M4.6 editor/pane/tree/lifecycle baselines.
-2. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
-3. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
-4. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
+2. After the M5 feasibility gate, complete M5.1 general project files and explicit program-stream modes before navigation or preference expansion; this is the next storage/process architecture boundary.
+3. Complete M5.2 direct definition/reference navigation and M5.3 symbol/font preferences, then freeze features for M6 hardening and beta release. Keep Unicode abbreviation completion and word wrap in post-beta M7.
+4. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+5. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
+6. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 
@@ -512,4 +558,5 @@ These are valuable, but each expands the executable-code, package-management, UI
 - [Lean toolchain contents](https://lean-lang.org/doc/reference/latest/Build-Tools-and-Distribution/)
 - [Lake command-line, environment, build, and language-server documentation](https://lean-lang.org/doc/reference/latest/Build-Tools-and-Distribution/Lake/)
 - [Lean server protocol overview](https://lean-lang.org/doc/api/Lean/Server/ProtocolOverview.html)
+- [Functional Programming in Lean: worked `cat` example using files and standard input](https://lean-lang.org/functional_programming_in_lean/Hello___-World___/Worked-Example___--cat/)
 - [Android App Bundle format and asset packs](https://developer.android.com/guide/app-bundle/app-bundle-format)
