@@ -17,15 +17,22 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -56,6 +63,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Switch
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -252,6 +260,10 @@ class MainActivity : ComponentActivity() {
                     onOpenLeanFile = { leanFilePicker.launch(arrayOf("text/plain", "application/octet-stream")) },
                     onNewProject = ::createAndSwitchProject,
                     onExportProject = { exportPicker.launch("${activeProjectId}.lean4android.zip") },
+                    onRenameProject = ::renameProject,
+                    onDeleteProject = ::deleteProject,
+                    onRenameEntry = ::renameEntry,
+                    onDeleteEntry = ::deleteEntry,
                     darkTheme = darkTheme,
                     onDarkThemeChanged = { enabled ->
                         darkTheme = enabled
@@ -379,7 +391,8 @@ class MainActivity : ComponentActivity() {
                 val messages = batch.diagnostics.mapNotNull { diagnostic ->
                     val message = (diagnostic.fields["message"] as? JsonValue.StringValue)?.value ?: return@mapNotNull null
                     val range = lspRange(diagnostic.fields["range"])
-                    LspDiagnosticUi(message, range?.first, range?.second)
+                    val severity = (diagnostic.fields["severity"] as? JsonValue.NumberValue)?.source?.toIntOrNull()
+                    LspDiagnosticUi(message, range?.first, range?.second, severity)
                 }.take(200)
                 lspUiState = lspUiState.copy(diagnostics = lspUiState.diagnostics + (batch.uri to messages))
             }
@@ -612,6 +625,57 @@ class MainActivity : ComponentActivity() {
         }.exceptionOrNull()?.message ?: return null
     }
 
+    private fun renameProject(oldId: String, name: String): String? {
+        val newId = LeanProjectRepository.normalizeProjectId(name)
+        return runCatching {
+            require(newId.isNotBlank()) { "Enter a project name" }
+            val priorRecent = recentProjects()
+            if (oldId == activeProjectId) {
+                editorStore.save(editorState)
+                lspService?.stopSession(oldId)
+            }
+            editorRepository().renameProject(oldId, newId)
+            var renamedStore: EditorSessionStore? = null
+            var renamedState: EditorSessionState? = null
+            if (oldId == activeProjectId) {
+                val oldStore = editorStore
+                val stateAfterRename = editorState.copy(projectId = newId)
+                renamedState = stateAfterRename
+                renamedStore = EditorSessionStore(filesDir.resolve("editor-recovery/$newId.bin")).also { it.save(stateAfterRename) }
+                oldStore.clear()
+            }
+            val recent = priorRecent.map { if (it == oldId) newId else it }.distinct()
+            val preferences = getPreferences(MODE_PRIVATE).edit().putString("recentProjects", recent.joinToString("\n"))
+            if (oldId == activeProjectId) preferences.putString("activeProject", newId)
+            check(preferences.commit()) { "Could not persist renamed project state" }
+            if (renamedStore != null && renamedState != null) {
+                activeProjectId = newId
+                editorStore = renamedStore
+                editorState = renamedState
+            }
+            mainHandler.post(::recreate)
+        }.exceptionOrNull()?.message ?: return null
+    }
+
+    private fun deleteProject(id: String): String? = runCatching {
+        val repository = editorRepository()
+        val remaining = repository.list().map { it.id }.filterNot { it == id }
+        require(remaining.isNotEmpty()) { "At least one project must remain" }
+        if (id == activeProjectId) lspService?.stopSession(id)
+        repository.delete(id)
+        EditorSessionStore(filesDir.resolve("editor-recovery/$id.bin")).clear()
+        val recent = recentProjects().filterNot { it == id }
+        val preferences = getPreferences(MODE_PRIVATE).edit().putString("recentProjects", recent.joinToString("\n"))
+        if (id == activeProjectId) preferences.putString("activeProject", remaining.first())
+        check(preferences.commit()) { "Could not persist deleted project state" }
+        if (id == activeProjectId) {
+            activeProjectId = remaining.first()
+            editorStore = EditorSessionStore(filesDir.resolve("editor-recovery/$activeProjectId.bin"))
+            editorState = editorStore.loadOrCreate(repository, activeProjectId)
+        }
+        mainHandler.post(::recreate)
+    }.exceptionOrNull()?.message ?: return null
+
     private fun importArchive(uri: Uri) = importFromProvider("archive") { id, staged ->
         contentResolver.openInputStream(uri).use { input -> copyBounded(requireNotNull(input), staged, 256L * 1024 * 1024) }
         editorRepository().import(id, staged)
@@ -784,6 +848,27 @@ class MainActivity : ComponentActivity() {
         return state.remove(activePath)
     }
 
+    private fun renameEntry(state: EditorSessionState, oldPath: String, newPath: String): EditorSessionState {
+        editorRepository().renameEntry(state.projectId, oldPath, newPath)
+        val prefix = oldPath.trimEnd('/') + "/"
+        val renamed = if (state.tabs.any { it.path == oldPath || it.path.startsWith(prefix) }) {
+            state.renamePrefix(oldPath, newPath)
+        } else state
+        mainHandler.post(::recreate)
+        return renamed
+    }
+
+    private fun deleteEntry(state: EditorSessionState, path: String): EditorSessionState {
+        val project = editorRepository().deleteEntry(state.projectId, path)
+        val next = state.removePrefix(path)
+        val deleted = if (next.tabs.isNotEmpty()) next else {
+            val fallback = project.sourceFiles.first()
+            next.add(fallback, editorRepository().read(state.projectId, fallback))
+        }
+        mainHandler.post(::recreate)
+        return deleted
+    }
+
     private fun checkLeanSource(sources: Map<String, String>, update: (EditorRunState) -> Unit) {
         thread(name = "lean-editor-check") {
             runCatching {
@@ -893,7 +978,12 @@ private data class LspUiState(
     val references: List<String> = emptyList(),
 )
 
-private data class LspDiagnosticUi(val message: String, val start: LspPosition?, val end: LspPosition?)
+private data class LspDiagnosticUi(
+    val message: String,
+    val start: LspPosition?,
+    val end: LspPosition?,
+    val severity: Int?,
+)
 
 private enum class LspRequestKind { Goals, TermGoal, Hover, Completion, Definition, References, RpcConnect, InteractiveGoals }
 
@@ -1009,6 +1099,10 @@ private fun LeanEditorScreen(
     onOpenLeanFile: () -> Unit,
     onNewProject: (String) -> String?,
     onExportProject: () -> Unit,
+    onRenameProject: (String, String) -> String?,
+    onDeleteProject: (String) -> String?,
+    onRenameEntry: (EditorSessionState, String, String) -> EditorSessionState,
+    onDeleteEntry: (EditorSessionState, String) -> EditorSessionState,
     darkTheme: Boolean,
     onDarkThemeChanged: (Boolean) -> Unit,
     lspUiState: LspUiState,
@@ -1032,12 +1126,21 @@ private fun LeanEditorScreen(
     var searchQuery by remember { mutableStateOf("") }
     var filesMenu by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
-    var drawerOpen by remember { mutableStateOf(false) }
-    var projectExpanded by remember { mutableStateOf(true) }
+    var drawerOpen by rememberSaveable { mutableStateOf(false) }
+    var projectExpanded by rememberSaveable { mutableStateOf(true) }
+    var goalsCollapsed by rememberSaveable { mutableStateOf(false) }
+    var messagesCollapsed by rememberSaveable { mutableStateOf(false) }
+    var outputCollapsed by rememberSaveable { mutableStateOf(false) }
     var openWorkspace by remember { mutableStateOf(false) }
     var newProjectDialog by rememberSaveable { mutableStateOf(false) }
     var newProjectName by rememberSaveable { mutableStateOf("") }
     var newProjectError by rememberSaveable { mutableStateOf<String?>(null) }
+    var renameProjectTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteProjectTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    var renameEntryTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteEntryTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    var lifecycleName by rememberSaveable { mutableStateOf("") }
+    var lifecycleError by rememberSaveable { mutableStateOf<String?>(null) }
     var closeDirty by remember { mutableStateOf(false) }
     var exportDirty by remember { mutableStateOf(false) }
     var settingsPage by remember { mutableStateOf<String?>(null) }
@@ -1050,6 +1153,12 @@ private fun LeanEditorScreen(
     }
     val histories = remember {
         initialState.tabs.associate { it.path to EditorUndoHistory(it.contents) }.toMutableMap()
+    }
+    var expandedProjectFolders by rememberSaveable(projectFiles) {
+        mutableStateOf(projectFiles.flatMap { path ->
+            val parts = path.split('/').dropLast(1)
+            parts.indices.map { index -> parts.take(index + 1).joinToString("/") }
+        }.distinct())
     }
     val running = runState == EditorRunState.Running
     BackHandler(enabled = filesMenu || moreMenu || drawerOpen || openWorkspace || settingsPage != null) {
@@ -1189,6 +1298,7 @@ private fun LeanEditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding()
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                     if (event.key == Key.Escape && (filesMenu || moreMenu || drawerOpen)) {
@@ -1207,9 +1317,12 @@ private fun LeanEditorScreen(
         ) {
             val workspaceModifier = Modifier.fillMaxSize().padding(12.dp)
             val density = LocalDensity.current
+            val workspaceWidthDp = maxWidth.value
+            val workspaceHeightDp = maxHeight.value
+            val dockedImeVisible = WindowInsets.ime.getBottom(density) > 0
             val workspaceHeightPixels = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
             val editorContent: @Composable (Modifier) -> Unit = { contentModifier ->
-                EditorContent(
+                    EditorContent(
                     modifier = contentModifier,
                     editor = editor,
                     value = editor.activePath?.let(fieldValues::getValue) ?: TextFieldValue(),
@@ -1231,11 +1344,20 @@ private fun LeanEditorScreen(
                     onCancel = onCancel,
                     onVerify = { runState = EditorRunState.Running; onVerifyRuntime { runState = it } },
                     onSelectTab = { publish(editor.select(it)) },
+                    onRenameTab = { path ->
+                        renameEntryTarget = path; lifecycleName = path; lifecycleError = null
+                    },
+                    onDeleteTab = { path -> deleteEntryTarget = path; lifecycleError = null },
                     lspUiState = lspUiState,
                     onCursorChanged = onCursorChanged,
                     onHover = { path, text, offset -> onLspAction(path, text, offset, LspRequestKind.Hover) },
                     hoverEnabled = lspUiState.status == "Ready",
                     outputFraction = outputFraction,
+                    outputCollapsed = outputCollapsed,
+                    messagesCollapsed = messagesCollapsed,
+                    dockedImeVisible = dockedImeVisible,
+                    onOutputCollapsedChanged = { outputCollapsed = it },
+                    onMessagesCollapsedChanged = { messagesCollapsed = it },
                     onOutputDrag = { pixels -> onOutputFractionChanged(outputFraction - pixels / workspaceHeightPixels) },
                     onOutputStep = { onOutputFractionChanged(outputFraction + it) },
                 )
@@ -1244,45 +1366,57 @@ private fun LeanEditorScreen(
             if (resolvedGoalsPosition == GoalsPanePosition.Right) {
                 val availablePixels = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
                 Row(workspaceModifier) {
-                    editorContent(Modifier.weight(1f - rightGoalsFraction))
+                    editorContent(Modifier.weight(if (goalsCollapsed) 1f else 1f - rightGoalsFraction))
                     PaneSplitter(
                         vertical = true,
                         paneName = "Goals pane",
                         fraction = rightGoalsFraction,
+                        collapsed = goalsCollapsed,
+                        onToggleCollapsed = { goalsCollapsed = !goalsCollapsed },
                         onDrag = { pixels -> onRightGoalsFractionChanged(rightGoalsFraction - pixels / availablePixels) },
                         onStep = { onRightGoalsFractionChanged(rightGoalsFraction + it) },
                     )
-                    GoalsPanel(Modifier.weight(rightGoalsFraction), editor.activePath, lspUiState)
+                    if (!goalsCollapsed) GoalsPanel(Modifier.weight(rightGoalsFraction), editor.activePath, lspUiState)
                 }
             } else {
                 val availablePixels = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
                 Column(workspaceModifier) {
-                    editorContent(Modifier.weight(1f - bottomGoalsFraction))
+                    editorContent(Modifier.weight(if (goalsCollapsed) 1f else 1f - bottomGoalsFraction))
                     PaneSplitter(
                         vertical = false,
                         paneName = "Goals pane",
                         fraction = bottomGoalsFraction,
+                        collapsed = goalsCollapsed,
+                        onToggleCollapsed = { goalsCollapsed = !goalsCollapsed },
                         onDrag = { pixels -> onBottomGoalsFractionChanged(bottomGoalsFraction - pixels / availablePixels) },
                         onStep = { onBottomGoalsFractionChanged(bottomGoalsFraction + it) },
                     )
-                    GoalsPanel(Modifier.weight(bottomGoalsFraction), editor.activePath, lspUiState)
+                    if (!goalsCollapsed) GoalsPanel(Modifier.weight(bottomGoalsFraction), editor.activePath, lspUiState)
                 }
             }
             if (drawerOpen) {
                 androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().clickable { drawerOpen = false })
                 Surface(Modifier.width(300.dp).fillMaxHeight().clickable { }, tonalElevation = 8.dp) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { projectExpanded = !projectExpanded }) {
                             Text((if (projectExpanded) "▾" else "▸") + " Project")
                         }
-                        if (projectExpanded) projectFiles.forEach { path ->
-                            val tab = editor.tabs.singleOrNull { it.path == path }
-                            TextButton(
-                                modifier = Modifier.fillMaxWidth().semantics {
-                                    contentDescription = "Open $path"
-                                    stateDescription = if (path == editor.activePath) "Selected" else "Not selected"
+                        if (projectExpanded) {
+                            val compactLandscape = useCompactLandscapeTreeFloor(workspaceWidthDp, workspaceHeightDp, projectExpanded)
+                            ProjectTree(
+                                modifier = if (compactLandscape) Modifier.fillMaxWidth().height(120.dp) else Modifier.fillMaxWidth().weight(1f),
+                                paths = projectFiles,
+                                activePath = editor.activePath,
+                                dirtyPaths = editor.tabs.filter(EditorTab::dirty).map(EditorTab::path).toSet(),
+                                expandedFolders = expandedProjectFolders.toSet(),
+                                onToggleFolder = { path ->
+                                    expandedProjectFolders = if (path in expandedProjectFolders) {
+                                        expandedProjectFolders - path
+                                    } else {
+                                        expandedProjectFolders + path
+                                    }
                                 },
-                                onClick = {
+                                onOpenFile = { path ->
                                     val next = onOpenSource(editor, path)
                                     if (path !in fieldValues) {
                                         val opened = next.tabs.single { it.path == path }
@@ -1291,20 +1425,38 @@ private fun LeanEditorScreen(
                                     }
                                     publish(next); drawerOpen = false
                                 },
-                            ) { Text(path + if (tab?.dirty == true) " •" else "") }
+                                onRenameEntry = { path ->
+                                    renameEntryTarget = path; lifecycleName = path; lifecycleError = null
+                                },
+                                onDeleteEntry = { path -> deleteEntryTarget = path; lifecycleError = null },
+                            )
                         }
-                        TextButton(enabled = !running, onClick = { drawerOpen = false; buildProject() }) { Text("Build project") }
-                        TextButton(enabled = !running, onClick = { drawerOpen = false; runState = EditorRunState.Running; onVerifyRuntime { runState = it } }) { Text("Verify runtime") }
-                        TextButton(onClick = { drawerOpen = false; onRestartLsp() }) { Text("Restart Lean server") }
-                        TextButton(
-                            enabled = !running,
-                            modifier = Modifier.semantics { contentDescription = "Export active project" },
-                            onClick = {
-                                drawerOpen = false
-                                if (editor.tabs.any(EditorTab::dirty)) exportDirty = true else onExportProject()
-                            },
-                        ) { Text("Export project") }
-                        TextButton(onClick = { drawerOpen = false; settingsPage = "settings" }) { Text("⚙ Settings") }
+                        val compactLandscape = useCompactLandscapeTreeFloor(workspaceWidthDp, workspaceHeightDp, projectExpanded)
+                        Column(
+                            (if (compactLandscape) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(max = 320.dp))
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            TextButton(enabled = !running, onClick = { drawerOpen = false; buildProject() }) { Text("Build project") }
+                            TextButton(enabled = !running, onClick = { drawerOpen = false; runState = EditorRunState.Running; onVerifyRuntime { runState = it } }) { Text("Verify runtime") }
+                            TextButton(onClick = { drawerOpen = false; onRestartLsp() }) { Text("Restart Lean server") }
+                            TextButton(
+                                enabled = !running,
+                                modifier = Modifier.semantics { contentDescription = "Export active project" },
+                                onClick = {
+                                    drawerOpen = false
+                                    if (editor.tabs.any(EditorTab::dirty)) exportDirty = true else onExportProject()
+                                },
+                            ) { Text("Export project") }
+                            TextButton(enabled = !running, onClick = {
+                                drawerOpen = false; deleteProjectTarget = editor.projectId; lifecycleError = null
+                            }) { Text("Delete Project") }
+                            TextButton(enabled = !running, onClick = {
+                                drawerOpen = false; renameProjectTarget = editor.projectId
+                                lifecycleName = editor.projectId; lifecycleError = null
+                            }) { Text("Rename Project") }
+                            TextButton(onClick = { drawerOpen = false; settingsPage = "settings" }) { Text("⚙ Settings") }
+                        }
                     }
                 }
             }
@@ -1320,9 +1472,19 @@ private fun LeanEditorScreen(
                 }
                 Text("Recent", style = MaterialTheme.typography.titleSmall)
                 if (recentProjects.isEmpty()) Text("No recent projects")
-                recentProjects.forEach { id -> TextButton(onClick = { openWorkspace = false; onOpenProject(id) }) { Text(id) } }
+                recentProjects.forEach { id -> ProjectOpenRow(
+                    id = id,
+                    onOpen = { openWorkspace = false; onOpenProject(id) },
+                    onRename = { renameProjectTarget = id; lifecycleName = id; lifecycleError = null },
+                    onDelete = { deleteProjectTarget = id; lifecycleError = null },
+                ) }
                 Text("My Projects", style = MaterialTheme.typography.titleSmall)
-                projects.forEach { id -> TextButton(onClick = { openWorkspace = false; onOpenProject(id) }) { Text(id) } }
+                projects.forEach { id -> ProjectOpenRow(
+                    id = id,
+                    onOpen = { openWorkspace = false; onOpenProject(id) },
+                    onRename = { renameProjectTarget = id; lifecycleName = id; lifecycleError = null },
+                    onDelete = { deleteProjectTarget = id; lifecycleError = null },
+                ) }
                 TextButton(onClick = { openWorkspace = false; onImportArchive() }) { Text("Import Project Archive") }
                 TextButton(onClick = { openWorkspace = false; onImportFolder() }) { Text("Import Project Folder") }
                 TextButton(onClick = { openWorkspace = false; onOpenLeanFile() }) { Text("Open Lean File") }
@@ -1361,6 +1523,92 @@ private fun LeanEditorScreen(
                 ) { Text("Create project") }
             },
             dismissButton = { TextButton(onClick = { newProjectDialog = false }) { Text("Cancel") } },
+        )
+    }
+
+    renameProjectTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameProjectTarget = null; lifecycleError = null },
+            title = { Text("Rename project") },
+            text = { OutlinedTextField(
+                value = lifecycleName,
+                onValueChange = { lifecycleName = it; lifecycleError = null },
+                singleLine = true,
+                label = { Text("Project name") },
+                isError = lifecycleError != null,
+                supportingText = lifecycleError?.let { error -> { Text(error) } },
+            ) },
+            confirmButton = { TextButton(enabled = lifecycleName.isNotBlank(), onClick = {
+                lifecycleError = onRenameProject(target, lifecycleName)
+                if (lifecycleError == null) { renameProjectTarget = null; openWorkspace = false }
+            }) { Text("Rename") } },
+            dismissButton = { TextButton(onClick = { renameProjectTarget = null; lifecycleError = null }) { Text("Cancel") } },
+        )
+    }
+
+    deleteProjectTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteProjectTarget = null; lifecycleError = null },
+            title = { Text("Delete project") },
+            text = { Text(lifecycleError ?: "Permanently delete $target and all of its files? Export it first if it is important.") },
+            confirmButton = { TextButton(onClick = {
+                lifecycleError = onDeleteProject(target)
+                if (lifecycleError == null) { deleteProjectTarget = null; openWorkspace = false }
+            }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deleteProjectTarget = null; lifecycleError = null }) { Text("Cancel") } },
+        )
+    }
+
+    renameEntryTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameEntryTarget = null; lifecycleError = null },
+            title = { Text("Rename file or folder") },
+            text = { OutlinedTextField(
+                value = lifecycleName,
+                onValueChange = { lifecycleName = it; lifecycleError = null },
+                singleLine = true,
+                label = { Text("Project-relative path") },
+                isError = lifecycleError != null,
+                supportingText = lifecycleError?.let { error -> { Text(error) } },
+            ) },
+            confirmButton = { TextButton(enabled = lifecycleName.isNotBlank(), onClick = {
+                runCatching { onRenameEntry(editor, target, lifecycleName) }.onSuccess { renamed ->
+                    val prefix = target.trimEnd('/') + "/"
+                    val destinationPrefix = lifecycleName.trimEnd('/') + "/"
+                    fieldValues.keys.toList().filter { it == target || it.startsWith(prefix) }.forEach { oldPath ->
+                        val newPath = if (oldPath == target) lifecycleName else destinationPrefix + oldPath.removePrefix(prefix)
+                        fieldValues.remove(oldPath)?.let { fieldValues[newPath] = it }
+                        histories.remove(oldPath)?.let { histories[newPath] = it }
+                    }
+                    publish(renamed); renameEntryTarget = null; drawerOpen = false
+                }.onFailure { lifecycleError = it.message.orEmpty() }
+            }) { Text("Rename") } },
+            dismissButton = { TextButton(onClick = { renameEntryTarget = null; lifecycleError = null }) { Text("Cancel") } },
+        )
+    }
+
+    deleteEntryTarget?.let { target ->
+        val prefix = target.trimEnd('/') + "/"
+        val dirtyAffected = editor.tabs.any { (it.path == target || it.path.startsWith(prefix)) && it.dirty }
+        AlertDialog(
+            onDismissRequest = { deleteEntryTarget = null; lifecycleError = null },
+            title = { Text("Delete file or folder") },
+            text = { Text(lifecycleError ?: buildString {
+                append("Permanently delete $target?")
+                if (dirtyAffected) append(" Unsaved changes in affected tabs will be lost.")
+            }) },
+            confirmButton = { TextButton(onClick = {
+                runCatching { onDeleteEntry(editor, target) }.onSuccess { deleted ->
+                    fieldValues.keys.retainAll(deleted.tabs.map(EditorTab::path).toSet())
+                    histories.keys.retainAll(deleted.tabs.map(EditorTab::path).toSet())
+                    deleted.tabs.forEach { tab ->
+                        if (tab.path !in fieldValues) fieldValues[tab.path] = TextFieldValue(tab.contents, TextRange(tab.contents.length))
+                        if (tab.path !in histories) histories[tab.path] = EditorUndoHistory(tab.contents)
+                    }
+                    publish(deleted); deleteEntryTarget = null; drawerOpen = false
+                }.onFailure { lifecycleError = it.message.orEmpty() }
+            }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deleteEntryTarget = null; lifecycleError = null }) { Text("Cancel") } },
         )
     }
 
@@ -1591,11 +1839,18 @@ private fun EditorContent(
     onCancel: () -> Unit,
     onVerify: () -> Unit,
     onSelectTab: (String) -> Unit,
+    onRenameTab: (String) -> Unit,
+    onDeleteTab: (String) -> Unit,
     lspUiState: LspUiState,
     onCursorChanged: (String, String, Int) -> Unit,
     onHover: (String, String, Int) -> Unit,
     hoverEnabled: Boolean,
     outputFraction: Float,
+    outputCollapsed: Boolean,
+    messagesCollapsed: Boolean,
+    dockedImeVisible: Boolean,
+    onOutputCollapsedChanged: (Boolean) -> Unit,
+    onMessagesCollapsedChanged: (Boolean) -> Unit,
     onOutputDrag: (Float) -> Unit,
     onOutputStep: (Float) -> Unit,
 ) {
@@ -1618,8 +1873,15 @@ private fun EditorContent(
         val end = diagnostic.end ?: return@mapNotNull null
         TextRange(offsetAtLspPosition(value.text, start), offsetAtLspPosition(value.text, end))
     }
+    val messagesHaveError = diagnosticSetHasError(activeDiagnostics.map(LspDiagnosticUi::severity))
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FileTabStrip(editor = editor, enabled = !running, onSelect = onSelectTab)
+        FileTabStrip(
+            editor = editor,
+            enabled = !running,
+            onSelect = onSelectTab,
+            onRename = onRenameTab,
+            onDelete = onDeleteTab,
+        )
         if (searchVisible) {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -1682,6 +1944,14 @@ private fun EditorContent(
                 )
             }
         }
+        EditorSymbolRow(
+            enabled = !running,
+            onSymbol = { symbol ->
+                val updated = insertEditorSymbol(value, symbol)
+                onValueChange(updated)
+                onCursorChanged(editor.activePath, updated.text, updated.selection.start)
+            },
+        )
         if (running) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CircularProgressIndicator()
             Text("Working…")
@@ -1690,23 +1960,115 @@ private fun EditorContent(
         if (activeDiagnostics.isNotEmpty()) {
             Surface(
                 Modifier.fillMaxWidth().heightIn(max = 160.dp),
-                color = MaterialTheme.colorScheme.errorContainer,
+                color = if (messagesHaveError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (messagesHaveError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                 shape = MaterialTheme.shapes.small,
             ) {
-                Column(Modifier.padding(8.dp).verticalScroll(rememberScrollState())) {
-                    Text("Messages", style = MaterialTheme.typography.titleSmall)
-                    activeDiagnostics.forEach { Text(it.message, style = MaterialTheme.typography.bodySmall) }
+                Column(Modifier.padding(horizontal = 8.dp, vertical = if (messagesCollapsed) 0.dp else 4.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Messages (${activeDiagnostics.size})", style = MaterialTheme.typography.titleSmall)
+                        TextButton(
+                            onClick = { onMessagesCollapsedChanged(!messagesCollapsed) },
+                            modifier = Modifier.size(30.dp).semantics {
+                                contentDescription = if (messagesCollapsed) "Restore Messages panel" else "Collapse Messages panel"
+                            },
+                            contentPadding = PaddingValues(0.dp),
+                        ) { Text(if (messagesCollapsed) "▲" else "▼") }
+                    }
+                    if (!messagesCollapsed) {
+                        Column(Modifier.verticalScroll(rememberScrollState())) {
+                            activeDiagnostics.forEach { Text(it.message, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    }
                 }
             }
         }
-        PaneSplitter(
-            vertical = false,
-            paneName = "Output panel",
-            fraction = outputFraction,
-            onDrag = onOutputDrag,
-            onStep = onOutputStep,
-        )
-        OutputPanel(runState, Modifier.weight(outputFraction))
+        if (!dockedImeVisible) {
+            PaneSplitter(
+                vertical = false,
+                paneName = "Output panel",
+                fraction = outputFraction,
+                collapsed = outputCollapsed,
+                onToggleCollapsed = { onOutputCollapsedChanged(!outputCollapsed) },
+                onDrag = onOutputDrag,
+                onStep = onOutputStep,
+            )
+            if (paneVisible(outputCollapsed)) OutputPanel(runState, Modifier.weight(outputFraction))
+        }
+    }
+}
+
+@Composable
+private fun ProjectTree(
+    modifier: Modifier,
+    paths: List<String>,
+    activePath: String?,
+    dirtyPaths: Set<String>,
+    expandedFolders: Set<String>,
+    onToggleFolder: (String) -> Unit,
+    onOpenFile: (String) -> Unit,
+    onRenameEntry: (String) -> Unit,
+    onDeleteEntry: (String) -> Unit,
+) {
+    val horizontal = rememberScrollState()
+    val vertical = rememberScrollState()
+    var menuPath by remember { mutableStateOf<String?>(null) }
+    Surface(modifier, color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
+        Column(
+            Modifier.fillMaxSize().horizontalScroll(horizontal).verticalScroll(vertical).padding(vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            projectTreeRows(paths, expandedFolders).forEach { row ->
+                val selected = row.path == activePath
+                androidx.compose.foundation.layout.Box {
+                    Row(
+                        Modifier
+                        .combinedClickable(
+                            onClick = { if (row.expandable) onToggleFolder(row.path) else onOpenFile(row.path) },
+                            onLongClick = { menuPath = row.path },
+                        )
+                        .padding(start = (8 + row.depth * 16).dp, end = 12.dp, top = 7.dp, bottom = 7.dp)
+                        .semantics {
+                            contentDescription = if (row.expandable) "${if (row.path in expandedFolders) "Collapse" else "Expand"} folder ${row.path}" else "Open ${row.path}"
+                            stateDescription = if (selected) "Selected" else "Not selected"
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            when (row.icon) {
+                                ProjectEntryIcon.Folder -> if (row.path in expandedFolders) "📂" else "📁"
+                                ProjectEntryIcon.LeanFile -> "📄"
+                                ProjectEntryIcon.File -> "📄"
+                            },
+                        )
+                        Text(row.label + if (row.path in dirtyPaths) " •" else "", maxLines = 1)
+                    }
+                    DropdownMenu(expanded = menuPath == row.path, onDismissRequest = { menuPath = null }) {
+                        DropdownMenuItem(text = { Text("Rename") }, onClick = { menuPath = null; onRenameEntry(row.path) })
+                        DropdownMenuItem(text = { Text("Delete") }, onClick = { menuPath = null; onDeleteEntry(row.path) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditorSymbolRow(enabled: Boolean, onSymbol: (String) -> Unit) {
+    val symbols = listOf("{", "}", "^", "→", "←", "↔", "∀", "∃", "λ", "∧", "∨", "¬", "≤", "≥", "≠", "⊢", "⟨", "⟩")
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).semantics { contentDescription = "Lean symbol keyboard row" },
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        symbols.forEach { symbol ->
+            TextButton(
+                enabled = enabled,
+                onClick = { onSymbol(symbol) },
+                modifier = Modifier.height(34.dp).widthIn(min = 36.dp).semantics { contentDescription = "Insert symbol $symbol" },
+                contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
+            ) { Text(symbol, fontFamily = FontFamily.Monospace) }
+        }
     }
 }
 
@@ -1773,14 +2135,21 @@ private fun PaneSplitter(
     vertical: Boolean,
     paneName: String,
     fraction: Float,
+    collapsed: Boolean,
+    onToggleCollapsed: () -> Unit,
     onDrag: (Float) -> Unit,
     onStep: (Float) -> Unit,
 ) {
     val orientation = if (vertical) Orientation.Horizontal else Orientation.Vertical
-    val modifier = (if (vertical) Modifier.width(12.dp).fillMaxHeight() else Modifier.height(12.dp).fillMaxWidth())
-        .draggable(rememberDraggableState(onDelta = onDrag), orientation)
+    val modifier = (if (vertical) Modifier.width(16.dp).fillMaxHeight() else Modifier.height(16.dp).fillMaxWidth())
+        .draggable(rememberDraggableState(onDelta = onDrag), orientation, enabled = !collapsed)
         .onPreviewKeyEvent { event ->
             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            if (event.key == Key.Enter || event.key == Key.Spacebar) {
+                onToggleCollapsed()
+                return@onPreviewKeyEvent true
+            }
+            if (collapsed) return@onPreviewKeyEvent false
             when (event.key) {
                 Key.DirectionLeft, Key.DirectionUp -> { onStep(0.05f); true }
                 Key.DirectionRight, Key.DirectionDown -> { onStep(-0.05f); true }
@@ -1789,37 +2158,88 @@ private fun PaneSplitter(
         }
         .focusable()
         .semantics {
-            contentDescription = "Resize $paneName ${if (vertical) "width" else "height"}"
-            stateDescription = "${(fraction * 100).toInt()} percent"
+            contentDescription = if (collapsed) "Restore $paneName" else "Resize $paneName ${if (vertical) "width" else "height"}"
+            stateDescription = if (collapsed) "Collapsed" else "${(fraction * 100).toInt()} percent"
             customActions = listOf(
-                CustomAccessibilityAction("Make $paneName larger") { onStep(0.05f); true },
-                CustomAccessibilityAction("Make $paneName smaller") { onStep(-0.05f); true },
+                CustomAccessibilityAction(if (collapsed) "Restore $paneName" else "Collapse $paneName") { onToggleCollapsed(); true },
+                CustomAccessibilityAction("Make $paneName larger") { if (collapsed) onToggleCollapsed() else onStep(0.05f); true },
+                CustomAccessibilityAction("Make $paneName smaller") { if (!collapsed) onStep(-0.05f); true },
             )
         }
         .background(MaterialTheme.colorScheme.outlineVariant)
-    androidx.compose.foundation.layout.Box(modifier)
+    androidx.compose.foundation.layout.Box(modifier, contentAlignment = Alignment.Center) {
+        Text(
+            when {
+                vertical && collapsed -> "◀"
+                vertical -> "▶"
+                collapsed -> "▲"
+                else -> "▼"
+            },
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.surface, CircleShape)
+                .padding(1.dp)
+                .clickable(onClick = onToggleCollapsed)
+                .semantics { contentDescription = if (collapsed) "Restore $paneName" else "Collapse $paneName" },
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
 }
 
 @Composable
-private fun FileTabStrip(editor: EditorSessionState, enabled: Boolean, onSelect: (String) -> Unit) {
+private fun FileTabStrip(
+    editor: EditorSessionState,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    var menuPath by remember { mutableStateOf<String?>(null) }
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         editor.tabs.forEach { tab ->
             val active = tab.path == editor.activePath
-            Surface(
-                color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier
-                    .clickable(enabled = enabled && !active) { onSelect(tab.path) }
+            androidx.compose.foundation.layout.Box {
+                Surface(
+                    color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                    .combinedClickable(
+                        enabled = enabled,
+                        onClick = { if (!active) onSelect(tab.path) },
+                        onLongClick = { menuPath = tab.path },
+                    )
                     .semantics {
                         contentDescription = "File tab ${tab.path}"
                         stateDescription = listOf(if (active) "Selected" else "Not selected", if (tab.dirty) "Unsaved changes" else "Saved").joinToString(", ")
                     },
-            ) {
-                Text(tab.path.substringAfterLast('/') + if (tab.dirty) " •" else "", Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                ) {
+                    Text(tab.path.substringAfterLast('/') + if (tab.dirty) " •" else "", Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                }
+                DropdownMenu(expanded = menuPath == tab.path, onDismissRequest = { menuPath = null }) {
+                    DropdownMenuItem(text = { Text("Rename") }, onClick = { menuPath = null; onRename(tab.path) })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { menuPath = null; onDelete(tab.path) })
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun ProjectOpenRow(id: String, onOpen: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
+    androidx.compose.foundation.layout.Box {
+        Text(
+            id,
+            modifier = Modifier
+                .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true })
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .semantics { contentDescription = "Open project $id" },
+        )
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; onRename() })
+            DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; onDelete() })
         }
     }
 }

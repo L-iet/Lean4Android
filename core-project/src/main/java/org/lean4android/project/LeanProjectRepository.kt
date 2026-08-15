@@ -58,7 +58,7 @@ class LeanProjectRepository(
             atomicWrite(staging.resolve("lean-toolchain"), "$leanToolchainSpec\n")
             atomicWrite(
                 staging.resolve("lakefile.toml"),
-                "name = \"$id\"\nversion = \"0.1.0\"\ndefaultTargets = [\"${leanName(id)}\"]\n\n[[lean_lib]]\nname = \"${leanName(id)}\"\nroots = [\"Main\", \"${leanName(id)}.Basic\"]\n",
+                "name = \"${leanName(id)}\"\nversion = \"0.1.0\"\ndefaultTargets = [\"${leanName(id)}\"]\n\n[[lean_lib]]\nname = \"${leanName(id)}\"\nroots = [\"Main\", \"${leanName(id)}.Basic\"]\n",
             )
             val module = leanName(id)
             atomicWrite(staging.resolve("$module/Basic.lean"), defaultLibrary(module))
@@ -89,6 +89,17 @@ class LeanProjectRepository(
             .toList()
         require(sources.isNotEmpty()) { "Project has no Lean source files" }
         return LeanProject(id, directory, sources)
+    }
+
+    fun renameProject(oldId: String, newId: String): LeanProject {
+        validateId(newId)
+        val project = open(oldId)
+        require(oldId != newId) { "Enter a different project name" }
+        require(root.listFiles().orEmpty().none { it != project.directory && it.name.equals(newId, ignoreCase = true) }) {
+            "Project already exists (case-insensitive): $newId"
+        }
+        Files.move(project.directory.toPath(), root.resolve(newId).toPath(), StandardCopyOption.ATOMIC_MOVE)
+        return open(newId)
     }
 
     fun save(projectId: String, relativePath: String, contents: String) {
@@ -128,11 +139,38 @@ class LeanProjectRepository(
 
     fun renameSource(projectId: String, oldPath: String, newPath: String): LeanProject {
         val project = open(projectId)
+        require(resolveContained(project.directory, oldPath).isFile) { "Lean source does not exist: $oldPath" }
+        require(resolveContained(project.directory, newPath).extension == "lean") { "Only Lean source files can be renamed" }
+        return renameEntry(projectId, oldPath, newPath)
+    }
+
+    fun renameEntry(projectId: String, oldPath: String, newPath: String): LeanProject {
+        val project = open(projectId)
         val source = resolveContained(project.directory, oldPath)
         val destination = resolveContained(project.directory, newPath)
-        require(source.isFile && source.extension == "lean") { "Lean source does not exist: $oldPath" }
-        require(destination.extension == "lean") { "Only Lean source files can be renamed" }
-        requireNoCaseFoldedCollision(project, newPath, oldPath)
+        require(source.exists()) { "Project entry does not exist: $oldPath" }
+        require(!source.isFile || (source.extension == "lean" && destination.extension == "lean")) {
+            "Lean source files must keep the .lean extension"
+        }
+        require(oldPath != newPath) { "Enter a different project-relative path" }
+        require(!source.isDirectory || !destination.toPath().startsWith(source.toPath())) {
+            "A folder cannot be moved inside itself"
+        }
+        val sourcePrefix = oldPath.trimEnd('/') + "/"
+        val destinationPrefix = newPath.trimEnd('/') + "/"
+        val movedSources = project.sourceFiles.filter { it == oldPath || it.startsWith(sourcePrefix) }
+            .map { if (it == oldPath) newPath else destinationPrefix + it.removePrefix(sourcePrefix) }
+        val retainedFolded = project.sourceFiles.filterNot { it == oldPath || it.startsWith(sourcePrefix) }
+            .map(String::lowercase).toSet()
+        require(movedSources.none { it.lowercase() in retainedFolded }) {
+            "Project entry already exists (case-insensitive): $newPath"
+        }
+        val collision = destination.parentFile?.listFiles().orEmpty().firstOrNull {
+            it != source && it.name.equals(destination.name, ignoreCase = true)
+        }
+        require(collision == null && (!destination.exists() || destination == source)) {
+            "Project entry already exists (case-insensitive): $newPath"
+        }
         destination.parentFile?.mkdirs()
         Files.move(source.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
         removeEmptyParents(source.parentFile, project.directory)
@@ -141,11 +179,20 @@ class LeanProjectRepository(
 
     fun deleteSource(projectId: String, relativePath: String): LeanProject {
         val project = open(projectId)
-        require(project.sourceFiles.size > 1) { "A project must keep at least one Lean source file" }
-        val source = resolveContained(project.directory, relativePath)
-        require(source.isFile && source.extension == "lean") { "Lean source does not exist: $relativePath" }
-        Files.delete(source.toPath())
-        removeEmptyParents(source.parentFile, project.directory)
+        require(resolveContained(project.directory, relativePath).isFile) { "Lean source does not exist: $relativePath" }
+        return deleteEntry(projectId, relativePath)
+    }
+
+    fun deleteEntry(projectId: String, relativePath: String): LeanProject {
+        val project = open(projectId)
+        val entry = resolveContained(project.directory, relativePath)
+        require(entry.exists()) { "Project entry does not exist: $relativePath" }
+        val prefix = relativePath.trimEnd('/') + "/"
+        val removedSources = project.sourceFiles.filter { it == relativePath || it.startsWith(prefix) }
+        require(removedSources.isNotEmpty()) { "Only folders containing Lean sources can be deleted here" }
+        require(project.sourceFiles.size > removedSources.size) { "A project must keep at least one Lean source file" }
+        if (entry.isDirectory) deleteTree(entry) else Files.delete(entry.toPath())
+        removeEmptyParents(entry.parentFile, project.directory)
         return open(projectId)
     }
 
@@ -414,10 +461,12 @@ class LeanProjectRepository(
         .filter(String::isNotEmpty).joinToString("") { it.replaceFirstChar(Char::uppercase) }
         .ifEmpty { "Project" }
 
-    private fun defaultMain(module: String) = """import $module.Basic
+    private fun defaultMain(module: String) = """namespace $module.Main
 
-#check $module.answer
-example : $module.answer = 42 := by rfl
+#check Nat
+example : 21 + 21 = 42 := by decide
+
+end $module.Main
 """
 
     private fun defaultLibrary(module: String) = """namespace $module

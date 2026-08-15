@@ -56,6 +56,20 @@ internal data class EditorSessionState(
         )
     }
 
+    fun renamePrefix(oldPath: String, newPath: String): EditorSessionState {
+        val prefix = oldPath.trimEnd('/') + "/"
+        fun renamed(path: String): String = when {
+            path == oldPath -> newPath
+            path.startsWith(prefix) -> newPath.trimEnd('/') + "/" + path.removePrefix(prefix)
+            else -> path
+        }
+        require(tabs.any { renamed(it.path) != it.path }) { "No open tab belongs to: $oldPath" }
+        return copy(
+            tabs = tabs.map { it.copy(path = renamed(it.path)) },
+            activePath = activePath?.let(::renamed),
+        )
+    }
+
     fun saveAs(oldPath: String, newPath: String): EditorSessionState {
         val source = tabs.singleOrNull { it.path == oldPath } ?: error("Editor tab is not open: $oldPath")
         require(tabs.none { it.path == newPath }) { "Editor tab already exists: $newPath" }
@@ -76,6 +90,17 @@ internal data class EditorSessionState(
             } else activePath,
         )
     }
+
+    fun removePrefix(path: String): EditorSessionState {
+        val prefix = path.trimEnd('/') + "/"
+        val removed = tabs.filter { it.path == path || it.path.startsWith(prefix) }
+        if (removed.isEmpty()) return this
+        val remaining = tabs - removed.toSet()
+        return copy(
+            tabs = remaining,
+            activePath = activePath?.takeIf { active -> remaining.any { it.path == active } } ?: remaining.firstOrNull()?.path,
+        )
+    }
 }
 
 /** Small, atomic recovery snapshot. Project source remains authoritative after a successful save. */
@@ -94,12 +119,16 @@ internal class EditorSessionStore(private val snapshot: File) {
             recovered.tabs.map(EditorTab::path).all { it in project.sourceFiles }
         ) return recovered
 
+        val initialPaths = buildList {
+            project.sourceFiles.singleOrNull { it == "Main.lean" }?.let(::add)
+            project.sourceFiles.firstOrNull { it !in this }?.let(::add)
+        }
         return EditorSessionState(
             projectId = projectId,
-            tabs = project.sourceFiles.map { path ->
+            tabs = initialPaths.map { path ->
                 repository.read(projectId, path).let { EditorTab(path, it, it) }
             },
-            activePath = project.sourceFiles.first(),
+            activePath = initialPaths.first(),
         )
     }
 

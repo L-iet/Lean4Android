@@ -37,9 +37,35 @@ class LeanProjectRepositoryTest {
     @Test fun `project names normalize spaces and creation rejects invalid and case folded collisions`() {
         assertEquals("My-Lean-Project", LeanProjectRepository.normalizeProjectId("  My  Lean Project  "))
         val repository = LeanProjectRepository(temporary.newFolder("named-projects"), "toolchain")
-        repository.create("My-Lean-Project")
+        val created = repository.create("My-Lean-Project")
+        val lakefile = created.directory.resolve("lakefile.toml").readText()
+        assertTrue(lakefile.contains("name = \"MyLeanProject\""))
+        assertTrue(lakefile.contains("roots = [\"Main\", \"MyLeanProject.Basic\"]"))
+        assertTrue(created.directory.resolve("Main.lean").readText().contains("namespace MyLeanProject.Main"))
         expectFailure("case-insensitive") { repository.create("my-lean-project") }
         expectFailure("1-64 safe filename") { repository.create("bad/name") }
+    }
+
+    @Test fun `common user project name styles generate one consistent valid Lean identity`() {
+        val repository = LeanProjectRepository(temporary.newFolder("name-styles"), "toolchain")
+        data class NameCase(val input: String, val id: String, val leanName: String)
+        val cases = listOf(
+            NameCase("Capitalized", "Capitalized", "Capitalized"),
+            NameCase("snake_case", "snake_case", "SnakeCase"),
+            NameCase("camelCase", "camelCase", "CamelCase"),
+            NameCase("TitleCase", "TitleCase", "TitleCase"),
+            NameCase("With spaces", "With-spaces", "WithSpaces"),
+            NameCase("with-hyphens", "with-hyphens", "WithHyphens"),
+        )
+        cases.forEach { (input, id, leanName) ->
+            assertEquals(id, LeanProjectRepository.normalizeProjectId(input))
+            val project = repository.create(id)
+            val lakefile = project.directory.resolve("lakefile.toml").readText()
+            assertTrue("package identity for $id", lakefile.contains("name = \"$leanName\""))
+            assertTrue("library identity for $id", lakefile.contains("name = \"$leanName\"\nroots = [\"Main\", \"$leanName.Basic\"]"))
+            assertTrue(project.directory.resolve("Main.lean").readText().contains("namespace $leanName.Main"))
+            assertTrue(project.directory.resolve("$leanName/Basic.lean").isFile)
+        }
     }
 
     @Test fun portableExportIsDeterministicAndExcludesGeneratedAndPrivateFiles() {
@@ -133,11 +159,37 @@ class LeanProjectRepositoryTest {
         expectFailure("at least one") { repository.deleteSource("sample", "Sample/Basic.lean") }
     }
 
+    @Test fun projectAndFolderLifecycleOperationsAreContainedAndCollisionSafe() {
+        val root = temporary.newFolder("projects")
+        val repository = LeanProjectRepository(root, "toolchain")
+        repository.create("sample")
+        repository.createSource("sample", "Nested/Deep/One.lean", "def one := 1\n")
+        repository.createSource("sample", "Nested/Two.lean", "def two := 2\n")
+
+        val renamedFolder = repository.renameEntry("sample", "Nested", "Sources")
+        assertTrue("Sources/Deep/One.lean" in renamedFolder.sourceFiles)
+        assertTrue("Sources/Two.lean" in renamedFolder.sourceFiles)
+        expectFailure("inside itself") { repository.renameEntry("sample", "Sources", "Sources/Child") }
+        expectFailure("case-insensitive") { repository.renameEntry("sample", "Sources/Two.lean", "sources/deep/one.lean") }
+
+        val afterFolderDelete = repository.deleteEntry("sample", "Sources")
+        assertFalse(afterFolderDelete.sourceFiles.any { it.startsWith("Sources/") })
+        expectFailure("escapes") { repository.deleteEntry("sample", "../outside") }
+
+        val renamedProject = repository.renameProject("sample", "renamed-project")
+        assertEquals("renamed-project", renamedProject.id)
+        assertFalse(root.resolve("sample").exists())
+        repository.create("occupied")
+        expectFailure("case-insensitive") { repository.renameProject("renamed-project", "OCCUPIED") }
+        repository.delete("renamed-project")
+        assertFalse(root.resolve("renamed-project").exists())
+    }
+
     @Test fun saveAsRetainsOriginalAndRejectsCaseFoldedCollision() {
         val repository = LeanProjectRepository(temporary.newFolder("projects"), "toolchain")
         repository.create("sample")
         repository.copySource("sample", "Main.lean", "Copies/MainCopy.lean", "def copied := 7\n")
-        assertTrue(repository.read("sample", "Main.lean").contains("import"))
+        assertTrue(repository.read("sample", "Main.lean").contains("namespace Sample.Main"))
         assertEquals("def copied := 7\n", repository.read("sample", "Copies/MainCopy.lean"))
         expectFailure("case-insensitive") {
             repository.createSource("sample", "copies/maincopy.lean")
@@ -156,7 +208,7 @@ class LeanProjectRepositoryTest {
         val lean = temporary.root.resolve("Chosen.lean").apply { writeText("def chosen := 9\n") }
         val scratch = repository.importStandalone("scratch", "Chosen.lean", lean)
         assertEquals("def chosen := 9\n", repository.read(scratch.id, "Chosen.lean"))
-        assertTrue(repository.read(scratch.id, "Main.lean").contains("import"))
+        assertTrue(repository.read(scratch.id, "Main.lean").contains("namespace Scratch.Main"))
 
         val hostile = temporary.newFolder("hostile").apply { resolve("lakefile.toml").writeText("require x from git \"https://bad\"") }
         expectFailure("metadata is missing") { repository.importFolder("bad", hostile) }

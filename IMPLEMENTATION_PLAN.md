@@ -375,6 +375,45 @@ Exit: a user can choose **New Project** directly from the Files menu or Open wor
 
 Exit: the Goals pane truthfully distinguishes tactic state from term expected type, editor selection offers a non-destructive Hover shortcut alongside standard Android actions, and hover documentation is readable with highlighted Lean code without introducing network or executable-content behavior.
 
+### M4.3 — Mobile editor navigation and symbol input (pre-M5)
+
+- [x] Correct named-project scaffolding so a freshly created project opens `Main.lean` without an `unknown module prefix` diagnostic and builds/runs offline with the generated Lake package and module names.
+- [x] Make the complete navigation drawer vertically scrollable while keeping project navigation practical when either the file tree or the action/settings section is long.
+- [x] Replace the flat centered project-path list with a left-aligned hierarchical tree. Compact chains of single-child directories in the VS Code style, preserve expandable folders, and expose typed folder/file icon metadata so later file-type-specific icons do not require rebuilding tree traversal.
+- [x] Give the project tree its own bounded horizontal and vertical scrolling region, independent from the outer drawer scroll, so deep paths and many siblings remain reachable without hiding Settings and other drawer actions.
+- [x] Add a persistent, horizontally scrollable mobile symbol row at the bottom of the editor and directly above the IME when it is visible. Insert braces, carets, and a curated first set of Lean/Unicode symbols at the current selection/cursor through the normal editor edit/history/LSP path.
+- [x] Add host/state/UI coverage for scaffolding, tree construction/compaction/icons, independent scroll behavior, symbol insertion/replacement/undo, accessibility, and IME/adaptive layouts; physically validate Samsung keyboard variants, deep/wide trees, project creation, offline Run, recreation, and exact no-orphan cleanup on the API-33 reference tablet.
+
+Exit: a newly named project is immediately diagnostic-free and runnable; every drawer action remains reachable with a large project; the project tree is recognizable, left-aligned, independently two-axis scrollable, and extensible for file-type icons; and the symbol row reliably edits at the current cursor/selection above supported Samsung keyboard layouts. M5 does not begin until this exit is device-proven.
+
+### M4.4 — Collapsible panes and compact-landscape reachability (pre-M5)
+
+- [x] Add direct accessible collapse/restore controls attached to the Output and Goals splitters and the Messages header. Preserve each pane's last expanded size independently from its collapsed state; move the Goals control with its resolved Right/Bottom placement.
+- [x] When a docked/non-floating IME is visible, temporarily suppress Output so only the editor, symbol row, and expanded Messages consume the resized workspace. Restore Output and its prior collapsed/expanded state when the IME closes; retain Android's overlay behavior for floating keyboards.
+- [x] Give an expanded Project tree a practical minimum height in extreme landscape windows where height is less than half the width, while keeping the drawer action region vertically scrollable and every action reachable.
+- [x] Add host/state and semantics coverage plus physical API-33 Samsung floating/docked keyboard, Right/Bottom Goals, Messages/Output collapse, extreme-landscape tree, recreation, baseline Run, and no-orphan acceptance.
+
+Exit: Goals, Messages, and Output can each be collapsed and restored at their visible boundary; docked typing preserves source/symbol/message space without Output consuming resized height; and an expanded project tree remains usable in extreme landscape without hiding drawer actions. M5 remains gated on device evidence.
+
+### M4.5 — Pre-M5 UI polish
+
+- [x] Reduce the Output/Goals splitter footprint while retaining attached, accessible collapse controls, compact the mobile symbol row, and reduce the collapsed Messages height.
+- [x] Preserve the open/closed navigation drawer and Project tree across configuration recreation, including folder expansion state.
+- [x] Remove the artificial gap between a closed Project tree and drawer actions while retaining the expanded tree's independent allocation.
+- [x] Use neutral Messages colors unless at least one LSP diagnostic has error severity; retain error-container treatment when an error is present.
+
+Exit: panel boundaries and the symbol row preserve more workspace, navigation state survives orientation changes, collapsed drawer actions remain evenly spaced, and Messages reserves red treatment for actual errors. M5 remains next.
+
+### M4.6 — Project and tree lifecycle actions (pre-M5)
+
+- [x] Add guarded project rename/delete actions below Export project in the drawer, with active/recent preference and recovery migration plus a valid fallback after active deletion.
+- [x] Add Rename/Delete long-press menus to Open workspace project rows and file tabs.
+- [x] Add Rename/Delete long-press menus to project-tree files and folders, with prefix-aware open-tab remapping/removal.
+- [x] Keep project/file/folder operations contained, collision-safe, link-safe, and atomic where renamed; require explicit destructive confirmation and retain at least one project and one Lean source.
+- [x] Cover repository/session operations on the host and physically validate all entry surfaces, active rename/delete recreation, cleanup, Ready LSP restoration, baseline offline Run, and exact no-orphan behavior.
+
+Exit: projects, files, and folders can be renamed or deleted from every requested surface without traversal, silent dirty loss, stale recovery, recreation crashes, or orphan processes. M5 remains next.
+
 ### M5 — Mathlib beta (duration determined by size/performance spike)
 
 - Produce and verify a version-matched Mathlib pack.
@@ -461,9 +500,10 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
-2. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
-3. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
+1. Begin M5 with the version-matched offline Mathlib pack and measure capacity, recovery, latency, memory, and thermal behavior without regressing the completed M4.6 editor/pane/tree/lifecycle baselines.
+2. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+3. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
+4. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 

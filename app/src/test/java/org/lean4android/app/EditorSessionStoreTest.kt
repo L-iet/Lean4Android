@@ -39,8 +39,20 @@ class EditorSessionStoreTest {
         val snapshot = temporary.root.resolve("editor.bin").apply { writeText("broken") }
 
         val restored = EditorSessionStore(snapshot).loadOrCreate(repository, "sample")
-        assertEquals(repository.open("sample").sourceFiles, restored.tabs.map(EditorTab::path))
+        assertEquals(listOf("Main.lean", "Sample/Basic.lean"), restored.tabs.map(EditorTab::path))
+        assertEquals("Main.lean", restored.activePath)
         assertTrue(restored.tabs.none(EditorTab::dirty))
+    }
+
+    @Test fun `large project initially opens Main and one companion while preserving drawer discovery`() {
+        val repository = LeanProjectRepository(temporary.newFolder("large-projects"), "toolchain")
+        repository.create("large")
+        repeat(30) { index -> repository.createSource("large", "Sources/File$index.lean", "def value$index := $index\n") }
+
+        val restored = EditorSessionStore(temporary.root.resolve("missing.bin")).loadOrCreate(repository, "large")
+
+        assertEquals(listOf("Main.lean", "Large/Basic.lean"), restored.tabs.map(EditorTab::path))
+        assertEquals(32, repository.open("large").sourceFiles.size)
     }
 
     @Test fun `tab operations retain dirty content and choose a surviving active tab`() {
@@ -68,5 +80,26 @@ class EditorSessionStoreTest {
         val empty = copied.remove("Copy.lean").remove("Main.lean")
         assertTrue(empty.tabs.isEmpty())
         assertEquals(null, empty.activePath)
+    }
+
+    @Test fun `folder rename and delete remap every affected open tab`() {
+        val initial = EditorSessionState(
+            "sample",
+            listOf(
+                EditorTab("Main.lean", "main", "main"),
+                EditorTab("Old/One.lean", "one", "dirty one"),
+                EditorTab("Old/Deep/Two.lean", "two", "two"),
+            ),
+            "Old/Deep/Two.lean",
+        )
+
+        val renamed = initial.renamePrefix("Old", "Sources")
+        assertEquals(listOf("Main.lean", "Sources/One.lean", "Sources/Deep/Two.lean"), renamed.tabs.map(EditorTab::path))
+        assertEquals("Sources/Deep/Two.lean", renamed.activePath)
+        assertTrue(renamed.tabs.single { it.path == "Sources/One.lean" }.dirty)
+
+        val deleted = renamed.removePrefix("Sources")
+        assertEquals(listOf("Main.lean"), deleted.tabs.map(EditorTab::path))
+        assertEquals("Main.lean", deleted.activePath)
     }
 }
