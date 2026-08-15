@@ -1,6 +1,7 @@
 package org.lean4android.app
 
 import androidx.compose.ui.text.TextRange
+import org.lean4android.lsp.JsonValueParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -9,6 +10,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LeanEditorEngineTest {
+    @Test fun `definition locations accept standard location and location link responses`() {
+        val response = JsonValueParser.parse(
+            """[{"uri":"file:///standard.lean","range":{"start":{"line":2,"character":3},"end":{"line":2,"character":4}}},{"targetUri":"file:///linked.lean","targetRange":{"start":{"line":8,"character":1},"end":{"line":8,"character":9}},"targetSelectionRange":{"start":{"line":8,"character":4},"end":{"line":8,"character":7}}}]""",
+        )
+
+        assertEquals(
+            listOf("file:///standard.lean" to (2 to 3), "file:///linked.lean" to (8 to 4)),
+            lspLocations(response),
+        )
+    }
+
     @Test fun `bounded undo redo discards redo branch after new edit`() {
         val history = EditorUndoHistory("zero", capacity = 3)
         history.record("one")
@@ -46,5 +58,26 @@ class LeanEditorEngineTest {
             highlighted.spanStyles.first { it.start == answerRanges.first().start && it.end == answerRanges.first().end }.item.background,
             androidx.compose.ui.graphics.Color.Unspecified,
         )
+    }
+
+    @Test fun `diagnostic decoration is bounded and preserves source`() {
+        val source = "example : True := by trivial\n"
+        val range = TextRange(10, 14)
+        val highlighted = leanHighlightedText(source, diagnosticRanges = listOf(range, TextRange(500, 600)))
+        assertEquals(source, highlighted.text)
+        assertTrue(highlighted.spanStyles.any {
+            it.start == range.start && it.end == range.end && it.item.textDecoration != null
+        })
+    }
+
+    @Test fun `LSP positions use zero based lines and UTF-16 code units`() {
+        val source = "α🙂x\nsecond"
+        assertEquals(LspPosition(0, 0), lspPositionAt(source, 0))
+        assertEquals(LspPosition(0, 3), lspPositionAt(source, 3)) // α=1, emoji=2 UTF-16 units
+        assertEquals(LspPosition(1, 0), lspPositionAt(source, 5))
+        assertEquals(LspPosition(1, 6), lspPositionAt(source, source.length))
+        assertEquals(3, offsetAtLspPosition(source, LspPosition(0, 3)))
+        assertEquals(5, offsetAtLspPosition(source, LspPosition(1, 0)))
+        assertEquals(source.length, offsetAtLspPosition(source, LspPosition(9, 0)))
     }
 }

@@ -8,7 +8,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.nio.file.Files
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 class LeanProjectRepositoryTest {
@@ -30,6 +32,46 @@ class LeanProjectRepositoryTest {
         val imported = repository.import("sample", archive)
         assertEquals(2, imported.sourceFiles.size)
         assertTrue(imported.directory.resolve("Sample/Basic.lean").readText().contains("41"))
+    }
+
+    @Test fun `project names normalize spaces and creation rejects invalid and case folded collisions`() {
+        assertEquals("My-Lean-Project", LeanProjectRepository.normalizeProjectId("  My  Lean Project  "))
+        val repository = LeanProjectRepository(temporary.newFolder("named-projects"), "toolchain")
+        repository.create("My-Lean-Project")
+        expectFailure("case-insensitive") { repository.create("my-lean-project") }
+        expectFailure("1-64 safe filename") { repository.create("bad/name") }
+    }
+
+    @Test fun portableExportIsDeterministicAndExcludesGeneratedAndPrivateFiles() {
+        val repository = LeanProjectRepository(temporary.newFolder("projects"), "toolchain")
+        val project = repository.create("sample")
+        project.directory.resolve(".lake/build/output.olean").apply { parentFile?.mkdirs(); writeText("generated") }
+        project.directory.resolve("editor-recovery.bin").writeText("private")
+        project.directory.resolve("secret.token").writeText("secret")
+
+        val first = java.io.ByteArrayOutputStream().also { repository.export("sample", it) }.toByteArray()
+        val second = java.io.ByteArrayOutputStream().also { repository.export("sample", it) }.toByteArray()
+        assertTrue(first.contentEquals(second))
+
+        val entries = mutableListOf<String>()
+        ZipInputStream(first.inputStream()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entries += entry.name
+                zip.closeEntry()
+            }
+        }
+        assertEquals(entries.sorted(), entries)
+        assertEquals(listOf(".lean4android-project", "Main.lean", "Sample/Basic.lean", "lakefile.toml", "lean-toolchain"), entries)
+    }
+
+    @Test fun portableExportRejectsSymbolicLinks() {
+        val repository = LeanProjectRepository(temporary.newFolder("projects"), "toolchain")
+        val project = repository.create("sample")
+        val target = temporary.root.resolve("outside.lean").apply { writeText("def outside := true\n") }
+        runCatching { Files.createSymbolicLink(project.directory.resolve("Linked.lean").toPath(), target.toPath()) }
+            .getOrElse { return }
+        expectFailure("symbolic links") { repository.export("sample", java.io.ByteArrayOutputStream()) }
     }
 
     @Test fun rejectsWrongToolchainAndUnsupportedWorkflow() {

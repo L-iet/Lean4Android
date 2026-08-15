@@ -13,6 +13,11 @@ object LeanLspDocuments {
 
     fun didClose(uri: String): String =
         """{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":${uri.jsonString()}}}}"""
+
+    fun didSave(uri: String, text: String? = null): String {
+        val includedText = text?.let { ",\"text\":${it.jsonString()}" }.orEmpty()
+        return """{"jsonrpc":"2.0","method":"textDocument/didSave","params":{"textDocument":{"uri":${uri.jsonString()}}$includedText}}"""
+    }
 }
 
 data class DiagnosticBatch<T>(

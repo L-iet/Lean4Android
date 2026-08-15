@@ -7,6 +7,7 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.zip.ZipEntry
@@ -31,16 +32,24 @@ class LeanProjectRepository(
 ) {
     companion object {
         private const val METADATA = ".lean4android-project"
+        private const val MAX_PROJECT_ENTRIES = 10_000
+        private const val MAX_PROJECT_FILE_BYTES = 64L * 1024 * 1024
+        private const val MAX_PROJECT_BYTES = 256L * 1024 * 1024
         private val SAFE_ID = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
         private val UNSUPPORTED_LAKE = Regex(
             "(?im)\\b(lean_exe|extern_lib|require\\s+.+\\s+from\\s+(git|\"https?://)|git|curl|wget)\\b",
         )
+
+        fun normalizeProjectId(name: String): String = name.trim().replace(Regex("\\s+"), "-")
     }
 
     fun create(id: String): LeanProject {
         validateId(id)
         val destination = root.resolve(id)
         require(!destination.exists()) { "Project already exists: $id" }
+        require(root.listFiles().orEmpty().none { it.isDirectory && it.name.equals(id, ignoreCase = true) }) {
+            "Project already exists (case-insensitive): $id"
+        }
         val staging = root.resolve(".$id.creating")
         deleteTree(staging)
         try {
@@ -147,18 +156,28 @@ class LeanProjectRepository(
     }
 
     fun export(id: String, destination: File) {
-        val project = open(id)
         destination.parentFile?.mkdirs()
         val temporary = destination.resolveSibling("${destination.name}.saving")
-        ZipOutputStream(BufferedOutputStream(FileOutputStream(temporary))).use { zip ->
-            project.directory.walkTopDown().filter(File::isFile).forEach { file ->
-                val path = file.relativeTo(project.directory).invariantSeparatorsPath
+        try {
+            FileOutputStream(temporary).use { export(id, it) }
+            Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (failure: Throwable) {
+            Files.deleteIfExists(temporary.toPath())
+            throw failure
+        }
+    }
+
+    /** Streams the supported portable project inputs without closing over provider or device identity. */
+    fun export(id: String, destination: OutputStream) {
+        val project = open(id)
+        val entries = portableEntries(project)
+        ZipOutputStream(BufferedOutputStream(destination)).use { zip ->
+            entries.forEach { (path, file) ->
                 zip.putNextEntry(ZipEntry(path).apply { time = 0L })
-                FileInputStream(file).buffered().use { it.copyTo(zip) }
+                FileInputStream(file).buffered().use { input -> input.copyTo(zip) }
                 zip.closeEntry()
             }
         }
-        Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
     }
 
     fun import(id: String, archive: File): LeanProject {
@@ -288,6 +307,42 @@ class LeanProjectRepository(
         require(values["toolchain"] == toolchainId) {
             "Project requires ${values["toolchain"] ?: "an unknown toolchain"}; installed toolchain is $toolchainId"
         }
+    }
+
+    private fun portableEntries(project: LeanProject): List<Pair<String, File>> {
+        val entries = mutableListOf<Pair<String, File>>()
+        var count = 0
+        var total = 0L
+        Files.walkFileTree(project.directory.toPath(), object : java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+            override fun preVisitDirectory(dir: java.nio.file.Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult {
+                require(!attrs.isSymbolicLink) { "Project export cannot contain symbolic links" }
+                val relative = project.directory.toPath().relativize(dir).toString().replace(File.separatorChar, '/')
+                return if (relative == ".lake" || relative.startsWith(".lake/")) {
+                    java.nio.file.FileVisitResult.SKIP_SUBTREE
+                } else java.nio.file.FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(file: java.nio.file.Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult {
+                require(!attrs.isSymbolicLink) { "Project export cannot contain symbolic links" }
+                require(attrs.isRegularFile) { "Project export may contain only regular files" }
+                val relative = project.directory.toPath().relativize(file).toString().replace(File.separatorChar, '/')
+                if (relative.endsWith(".lean") || relative == "lakefile.toml" || relative == "lean-toolchain" || relative == METADATA) {
+                    require(++count <= MAX_PROJECT_ENTRIES) { "Project has too many portable entries" }
+                    require(attrs.size() <= MAX_PROJECT_FILE_BYTES) { "Project file exceeds 64 MiB: $relative" }
+                    total += attrs.size()
+                    require(total <= MAX_PROJECT_BYTES) { "Portable project exceeds 256 MiB" }
+                    // Re-resolve every entry so a concurrently replaced path cannot escape containment.
+                    entries += relative to resolveContained(project.directory, relative)
+                }
+                return java.nio.file.FileVisitResult.CONTINUE
+            }
+        })
+        val sorted = entries.sortedBy { it.first }
+        require(sorted.any { it.first == METADATA } && sorted.any { it.first == "lakefile.toml" } &&
+            sorted.any { it.first == "lean-toolchain" } && sorted.any { it.first.endsWith(".lean") }) {
+            "Project is missing required portable inputs"
+        }
+        return sorted
     }
 
     private fun validateSupportedWorkflow(directory: File) {

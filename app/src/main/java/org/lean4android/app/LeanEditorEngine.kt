@@ -8,6 +8,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 
 internal class EditorUndoHistory(
     initial: String,
@@ -61,16 +62,48 @@ internal fun nextEditorMatch(matches: List<TextRange>, selection: TextRange, bac
     }
 }
 
+internal data class LspPosition(val line: Int, val character: Int)
+
+/** Compose and LSP both index Java/Kotlin strings in UTF-16 code units. */
+internal fun lspPositionAt(source: String, offset: Int): LspPosition {
+    val safeOffset = offset.coerceIn(0, source.length)
+    val lineStart = source.lastIndexOf('\n', startIndex = (safeOffset - 1).coerceAtLeast(0))
+        .let { if (it < 0 || safeOffset == 0) 0 else it + 1 }
+    return LspPosition(
+        line = source.take(safeOffset).count { it == '\n' },
+        character = safeOffset - lineStart,
+    )
+}
+
+internal fun offsetAtLspPosition(source: String, position: LspPosition): Int {
+    require(position.line >= 0 && position.character >= 0) { "LSP position cannot be negative" }
+    var line = 0
+    var lineStart = 0
+    while (line < position.line) {
+        val newline = source.indexOf('\n', lineStart)
+        if (newline < 0) return source.length
+        lineStart = newline + 1
+        line++
+    }
+    val lineEnd = source.indexOf('\n', lineStart).let { if (it < 0) source.length else it }
+    return (lineStart + position.character).coerceAtMost(lineEnd)
+}
+
 internal class LeanSyntaxVisualTransformation(
     private val searchQuery: String = "",
+    private val diagnosticRanges: List<TextRange> = emptyList(),
 ) : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText = TransformedText(
-        leanHighlightedText(text.text, searchQuery),
+        leanHighlightedText(text.text, searchQuery, diagnosticRanges),
         OffsetMapping.Identity,
     )
 }
 
-internal fun leanHighlightedText(source: String, searchQuery: String = ""): AnnotatedString = buildAnnotatedString {
+internal fun leanHighlightedText(
+    source: String,
+    searchQuery: String = "",
+    diagnosticRanges: List<TextRange> = emptyList(),
+): AnnotatedString = buildAnnotatedString {
     append(source)
     LEAN_TOKEN_RULES.forEach { (pattern, style) ->
         pattern.findAll(source).forEach { match ->
@@ -79,6 +112,11 @@ internal fun leanHighlightedText(source: String, searchQuery: String = ""): Anno
     }
     findEditorMatches(source, searchQuery).forEach { match ->
         addStyle(SEARCH_STYLE, match.start, match.end)
+    }
+    diagnosticRanges.forEach { range ->
+        val start = range.start.coerceIn(0, source.length)
+        val end = range.end.coerceIn(start, source.length)
+        if (start < end) addStyle(DIAGNOSTIC_STYLE, start, end)
     }
 }
 
@@ -95,4 +133,9 @@ private val LEAN_TOKEN_RULES = listOf(
 private val SEARCH_STYLE = SpanStyle(
     color = Color(0xff111111),
     background = Color(0xffffd54f),
+)
+
+private val DIAGNOSTIC_STYLE = SpanStyle(
+    color = Color(0xffb3261e),
+    textDecoration = TextDecoration.Underline,
 )

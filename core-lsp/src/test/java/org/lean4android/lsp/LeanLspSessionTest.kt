@@ -24,6 +24,12 @@ class LeanLspSessionTest {
         session.initialized()
         session.didOpen("file:///project/Main.lean", 1, "example : False := by rfl")
         session.didChange("file:///project/Main.lean", 2, "example : True := by trivial")
+        session.didSave("file:///project/Main.lean")
+        session.request(LeanLspRequests.request(
+            3,
+            "textDocument/hover",
+            LeanLspRequests.textDocumentPosition("file:///project/Main.lean", 0, 5),
+        ))
         assertFalse(session.acceptsDiagnostics(DiagnosticBatch("file:///project/Main.lean", 1, emptyList<Any>())))
         assertTrue(session.acceptsDiagnostics(DiagnosticBatch("file:///project/Main.lean", 2, emptyList<Any>())))
         session.requestShutdown(2)
@@ -33,7 +39,7 @@ class LeanLspSessionTest {
         assertTrue(process.inputClosed)
         assertFalse(process.terminated)
         val payloads = framedPayloads(process.written.toByteArray())
-        assertEquals(listOf("initialize", "initialized", "didOpen", "didChange", "shutdown", "exit"), payloads.map(::kind))
+        assertEquals(listOf("initialize", "initialized", "didOpen", "didChange", "didSave", "hover", "shutdown", "exit"), payloads.map(::kind))
     }
 
     @Test
@@ -71,6 +77,8 @@ class LeanLspSessionTest {
         "\"method\":\"initialized\"" in payload -> "initialized"
         "didOpen" in payload -> "didOpen"
         "didChange" in payload -> "didChange"
+        "didSave" in payload -> "didSave"
+        "textDocument/hover" in payload -> "hover"
         "\"method\":\"shutdown\"" in payload -> "shutdown"
         "\"method\":\"exit\"" in payload -> "exit"
         else -> error("Unknown payload: $payload")

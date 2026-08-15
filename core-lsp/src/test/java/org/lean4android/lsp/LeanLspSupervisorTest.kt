@@ -23,7 +23,7 @@ class LeanLspSupervisorTest {
             """{"jsonrpc":"2.0","id":7,"method":"client/registerCapability","params":{"registrations":[]}}""",
             """{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"ready"}}""",
         )
-        val process = FakeRunningProcess(inbound)
+        val process = FakeRunningProcess(inbound, "server warning\n".toByteArray())
         val session = LeanLspSession.start(command(), ProcessLauncher { process })
         val notifications = mutableListOf<String>()
         var reason: LeanLspSupervisor.StopReason? = null
@@ -47,6 +47,11 @@ class LeanLspSupervisorTest {
             framedPayloads(process.written.toByteArray()),
         )
         assertFalse(supervisor.isRunning())
+        repeat(20) {
+            if ("server warning" in supervisor.stderrTail()) return@repeat
+            Thread.sleep(5)
+        }
+        assertTrue(supervisor.stderrTail().contains("server warning"))
         supervisor.close()
         assertTrue(process.terminated)
     }
@@ -95,12 +100,12 @@ class LeanLspSupervisorTest {
         return generateSequence(io::read).toList()
     }
 
-    private class FakeRunningProcess(inbound: ByteArray) : RunningProcess {
+    private class FakeRunningProcess(inbound: ByteArray, errors: ByteArray = byteArrayOf()) : RunningProcess {
         val written = ByteArrayOutputStream()
         var terminated = false
         override val standardInput: OutputStream = written
         override val standardOutput: InputStream = ByteArrayInputStream(inbound)
-        override val standardError: InputStream = ByteArrayInputStream(byteArrayOf())
+        override val standardError: InputStream = ByteArrayInputStream(errors)
         override val isAlive: Boolean get() = !terminated
         override fun awaitExit(timeout: Duration): Int? = null
         override fun terminate(gracePeriod: Duration): Int { terminated = true; return -1 }

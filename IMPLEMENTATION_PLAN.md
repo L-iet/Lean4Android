@@ -335,23 +335,45 @@ Exit: multiple project files behave like browser tabs, every editor line has a s
 
 ### M3.3 — User-facing project export (pre-M4)
 
-- [ ] Implement `docs/project/M3_3_PROJECT_EXPORT_REQUIREMENTS.md`: add an accessible **Export project** action to the navigation drawer for the active app-managed project.
-- [ ] Use SAF `CreateDocument` to stream a portable ZIP to a user-selected provider destination without storage permission, exposing an internal app-private path, persisting the provider URI as project identity, or running Lean/Lake against exported content.
-- [ ] Define and test the portable archive contents: include validated sources, `lakefile.toml`, pinned `lean-toolchain`, and required portable project metadata; exclude `.lake/`, recovery snapshots, caches, temporary files, links, device paths, logs, and secrets.
-- [ ] Protect dirty buffers with explicit **Save and Export**, **Export saved version**, and **Cancel** choices; keep the active project and editor state unchanged by export.
-- [ ] Bound entry count, per-file and aggregate bytes, stream with bounded memory, report provider/cancellation failures truthfully, and clean app-owned staging plus a partial destination where the provider permits deletion.
-- [ ] Add archive unit/instrumentation coverage and physically prove export through SAF, reimport under a fresh internal identity, offline build/run equivalence, cancellation/failure recovery, adaptive drawer behavior, recreation, and exact no-orphan cleanup.
+- [x] Implement `docs/project/M3_3_PROJECT_EXPORT_REQUIREMENTS.md`: add an accessible **Export project** action to the navigation drawer for the active app-managed project.
+- [x] Use SAF `CreateDocument` to stream a portable ZIP to a user-selected provider destination without storage permission, exposing an internal app-private path, persisting the provider URI as project identity, or running Lean/Lake against exported content.
+- [x] Define and test the portable archive contents: include validated sources, `lakefile.toml`, pinned `lean-toolchain`, and required portable project metadata; exclude `.lake/`, recovery snapshots, caches, temporary files, links, device paths, logs, and secrets.
+- [x] Protect dirty buffers with explicit **Save and Export**, **Export saved version**, and **Cancel** choices; keep the active project and editor state unchanged by export.
+- [x] Bound entry count, per-file and aggregate bytes, stream with bounded memory, report provider/cancellation failures truthfully, and clean app-owned staging plus a partial destination where the provider permits deletion.
+- [x] Add archive unit/instrumentation coverage and physically prove export through SAF, reimport under a fresh internal identity, offline build/run equivalence, cancellation/failure recovery, adaptive drawer behavior, recreation, and exact no-orphan cleanup.
 
 Exit: a user can choose **Export project** from the drawer, save a portable project ZIP outside uninstall-sensitive app storage, and reimport that ZIP into a working offline project without leaking generated/device-private state. M4 does not begin until this exit is device-proven.
 
 ### M4 — Interactive Lean experience (4–6 weeks)
 
-- Implement LSP lifecycle, document sync, live diagnostics, hover, completion, and go-to-definition.
-- Add a cursor-synchronized goals/messages pane using the pinned Lean server protocol.
-- Add crash recovery, stale-response handling, progress, and server restart controls.
-- Validate server behavior with the full split-artifact runtime and measure its peak RSS separately from one-shot checking.
+- [x] Connect every open editor buffer to the retained per-project `LeanLspService`: initialize the pinned `lake serve` workspace, send ordered/versioned open/change/save/close notifications, use correct UTF-16 positions, and reopen current documents after a generation change.
+- [x] Render live version-filtered diagnostics in the source surface and a bounded Messages view. Reject stale diagnostics/responses after edits, file switches, project switches, and server restarts without losing dirty buffers or blocking normal Save/Run behavior.
+- [x] Implement hover, completion, go-to-definition, references where supported, and the pinned Lean goal/RPC request needed for cursor-synchronized goals. Keep requests cancellable/generation-tagged and degrade individual unsupported capabilities without destabilizing the document session.
+- [x] Add a dedicated **Goals** pane alongside the existing editor and output panel. Add **Settings → Editor → Goals pane position** with exactly **Auto**, **Right side**, and **Bottom** choices. Persist the choice app-privately and apply it immediately: Auto resolves to Bottom in portrait and Right side in landscape; the explicit choices do not change merely because orientation changes.
+- [x] Make the three work surfaces practically resizable. A visible, keyboard/accessibility-operable splitter adjusts the Goals pane width in right-side mode and height in bottom mode; the editor/output split is likewise adjustable on the axis where they share space. Clamp every pane to usable minimum/maximum bounds, persist independent normalized sizes for right/bottom and editor/output arrangements, restore them across Activity/process recreation, and re-clamp rather than hide content when window size, orientation, font scale, or system insets change.
+- [x] Define adaptive behavior for compact windows and IME use: no overlapping panes, splitters remain reachable, editor text/cursor and diagnostic navigation remain usable, and a collapsed/temporarily hidden pane has an accessible way to restore it. Tablet portrait/landscape and phone-sized portrait/landscape must preserve the completed drawer, tabs, gutter, menus, output, and dark-theme baselines.
+- [x] Add visible server status/progress and an explicit restart action in the Goals pane, which is the single server-status surface; do not duplicate status between the editor and output panel. Implement bounded crash recovery/backoff, one-reader ownership, deterministic teardown, cancellation, and exact no-orphan cleanup while retaining one server per active project.
+- [x] Validate with the full split-artifact runtime: automated framing/lifecycle/document-version/UTF-16/restart tests; Compose/state tests for placement, resizing, persistence, rotation, accessibility, and stale UI rejection; and physical offline device scenarios covering rapid edits, save, file switch, cursor movement/goals, hover/completion/definition, output interaction, process recreation, forced server restart/crash, and all Auto/Right/Bottom layouts. Measure cold and warm diagnostic/goal latency and peak LSP PSS separately from one-shot checking.
 
-Exit: automated protocol tests plus a device scenario demonstrate correct diagnostics/goals during rapid edits, save, file switch, and server restart.
+Exit: automated protocol and UI tests plus physical offline device scenarios demonstrate correct current-version diagnostics and cursor-synchronized goals during rapid edits, save, file switch, Activity/process recreation, and server restart; hover, completion, and go-to-definition work for the supported two-module project; Auto/Right/Bottom Goals placement and persisted bounded resizing keep editor, output, and Goals usable in tablet and phone-sized portrait/landscape layouts; and shutdown/cancellation leave no Lean/Lake child.
+
+### M4.1 — Named project creation and direct Files-menu access
+
+- [x] Let the user choose a project name when creating a project. Validate and normalize the name before any filesystem mutation, show collisions and invalid names inline, and create/activate the project atomically without losing the current workspace or dirty buffers on cancellation/failure.
+- [x] Add **New Project** to the folder/Files popup alongside New, Open, Save, Save As, and Close. Keep **New** scoped to creating a file in the current project and **New Project** scoped to the named-project flow; both labels, enabled states, focus order, keyboard dismissal, and accessibility semantics must remain unambiguous.
+- [x] Reuse the same named-project flow from Open workspace → New Project so both entry points have identical validation, defaults, cancellation, recovery, recent-project registration, and offline pinned-toolchain metadata.
+- [x] Add host/state tests plus physical phone/tablet coverage for valid names, invalid/reserved names, case-folded collisions, cancellation, Activity recreation, Files-menu access, project activation, first edit/save/Run, and exact no-orphan cleanup.
+
+Exit: a user can choose **New Project** directly from the Files menu or Open workspace, assign a valid name, and enter an atomically created offline-ready project; file-level **New** remains clearly distinct and failures never disturb the prior project or dirty editor state.
+
+### M4.2 — Expected types and richer editor inspection
+
+- [x] Request `$/lean/plainTermGoal` at the same debounced, generation/version-checked cursor position as `$/lean/plainGoal`. Retain tactic goals and term expected types independently: display whichever non-empty result exists, display both under distinct **Goals** and **Expected type** sections when both exist, and display **No goals** only when neither exists.
+- [x] Extend the editor's native long-press/selection context menu with **Hover** while preserving the platform Cut, Copy, Paste where applicable, and Select all actions. Route the action through the existing hover request/state path at the active selection or cursor and reveal the result in the existing Goals pane without changing source or selection.
+- [x] Render Lean hover Markdown as structured, selectable content rather than raw Markdown punctuation. Support bounded paragraphs, headings, lists, inline code, emphasis, links as readable labels, and fenced code blocks; apply the existing Lean syntax highlighter to `lean`/`lean4` fences and a safe monospaced fallback to other code fences. Do not add WebView, network content loading, raw HTML execution, or an unrestricted Markdown engine.
+- [x] Add protocol/parser/render-model tests for all four goal combinations plus physical API-33 acceptance for real tactic-only, term-only, and neither states; context-menu Hover alongside standard editing actions; Markdown and Lean-fence rendering in the current dark tablet layout and compact-window recreation; stale-response rejection; and exact no-orphan cleanup.
+
+Exit: the Goals pane truthfully distinguishes tactic state from term expected type, editor selection offers a non-destructive Hover shortcut alongside standard Android actions, and hover documentation is readable with highlighted Lean code without introducing network or executable-content behavior.
 
 ### M5 — Mathlib beta (duration determined by size/performance spike)
 
@@ -439,12 +461,9 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Complete and physically validate M3.3's drawer **Export project** workflow, portable bounded ZIP contract, dirty-buffer choices, SAF failure cleanup, and export/reimport/offline-build round trip.
-2. Only after M3.3 exits, begin M4 by connecting editor document changes to `LeanLspService`, preserving generation-aware reconnection, one reader, stale-diagnostic rejection, and restart controls.
-3. Add live version-filtered diagnostics and the first cursor-synchronized goals/messages surface without weakening the completed M3/M3.1/M3.2/M3.3 recovery and file-workflow behavior.
-4. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
-5. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle and M1 conformance/performance cases.
-6. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
+1. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+2. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
+3. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 

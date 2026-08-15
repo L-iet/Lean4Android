@@ -11,11 +11,34 @@ class LeanLspDocumentsTest {
         val uri = "file:///project space/Main.lean"
         val open = LeanLspDocuments.didOpen(uri, 1, "#check \"λ\"\n")
         val change = LeanLspDocuments.didChange(uri, 2, "#eval 1 + 1\n")
+        val save = LeanLspDocuments.didSave(uri, "#check \"λ\"\n")
 
         assertTrue(open.contains("\"languageId\":\"lean\""))
         assertTrue(open.contains("#check \\\"λ\\\"\\n"))
         assertTrue(change.contains("\"version\":2"))
         assertTrue(change.contains("\"contentChanges\":[{"))
+        assertTrue(save.contains("\"method\":\"textDocument/didSave\""))
+        assertTrue(save.contains("#check \\\"λ\\\"\\n"))
+    }
+
+    @Test
+    fun `standard and pinned Lean requests encode UTF-16 positions and RPC session`() {
+        val uri = "file:///project space/Main.lean"
+        val hover = LeanLspRequests.request(7, "textDocument/hover", LeanLspRequests.textDocumentPosition(uri, 3, 5))
+        val termGoal = LeanLspRequests.plainTermGoal(11, uri, 3, 5)
+        val connect = LeanLspRequests.rpcConnect(8, uri)
+        val goals = LeanLspRequests.interactiveGoals(9, uri, 3, 5, 42)
+        val references = LeanLspRequests.references(10, uri, 3, 5)
+
+        assertTrue(hover.contains("\"id\":7"))
+        assertTrue(hover.contains("\"line\":3,\"character\":5"))
+        assertTrue(termGoal.contains("\"method\":\"$/lean/plainTermGoal\""))
+        assertTrue(termGoal.contains("\"line\":3,\"character\":5"))
+        assertTrue(connect.contains("$/lean/rpc/connect"))
+        assertTrue(goals.contains("Lean.Widget.getInteractiveGoals"))
+        assertTrue(goals.contains("\"sessionId\":42"))
+        assertTrue(references.contains("textDocument/references"))
+        assertTrue(references.contains("\"includeDeclaration\":true"))
     }
 
     @Test

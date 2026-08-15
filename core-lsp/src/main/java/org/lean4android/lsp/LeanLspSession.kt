@@ -54,10 +54,25 @@ class LeanLspSession private constructor(
         messages.write(LeanLspDocuments.didClose(uri))
     }
 
+    fun didSave(uri: String, text: String? = null) {
+        synchronized(this) { require(state == State.INITIALIZED) { "Lean LSP session is not initialized" } }
+        messages.write(LeanLspDocuments.didSave(uri, text))
+    }
+
+    fun request(payload: String) {
+        synchronized(this) { require(state == State.INITIALIZED) { "Lean LSP session is not initialized" } }
+        val envelope = JsonRpcEnvelopeParser.parse(payload)
+        require(envelope is JsonRpcEnvelope.Request) { "Only JSON-RPC requests may use request()" }
+        messages.write(payload)
+    }
+
     fun <T> acceptsDiagnostics(batch: DiagnosticBatch<T>): Boolean = versions.accepts(batch)
 
     /** Blocking read intended for exactly one supervisor-owned reader coroutine/thread. */
     fun readMessage(): String? = messages.read()
+
+    /** Blocking stderr read for the supervisor-owned drain thread; protocol bytes remain stdout-only. */
+    fun readError(buffer: ByteArray): Int = process.standardError.read(buffer)
 
     fun dispatcher(sink: LeanLspEventSink): LeanLspDispatcher =
         LeanLspDispatcher(this, ::acceptsDiagnostics, sink)
