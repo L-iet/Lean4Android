@@ -43,6 +43,7 @@ The targeted build is a compatibility gate. Inspect its header/hash and prove it
 
 ```shell
 LEAN4ANDROID_JOBS=4 \
+LEAN4ANDROID_PROGRESS_INTERVAL_SECONDS=60 \
 LEAN4ANDROID_LOG_FILE="$PWD/toolchain/output/mathlib-android2-full-build.log" \
   mathlib/scripts/build-android2-artifacts.sh
 tail -f toolchain/output/mathlib-android2-full-build.log
