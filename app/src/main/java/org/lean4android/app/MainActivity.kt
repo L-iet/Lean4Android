@@ -348,7 +348,7 @@ class MainActivity : ComponentActivity() {
                     is ToolchainHealth.Ready -> health.layout
                     is ToolchainHealth.Missing -> error(health.problems.joinToString("\n"))
                 }
-                val project = editorRepository().open(activeProjectId)
+                val project = editorRepository().reconcileLakeConfiguration(activeProjectId)
                 val command = ToolchainCommandFactory(layout, filesDir, cacheDir).lakeServer(project.directory)
                 requireNotNull(lspService) { "LSP service disconnected during startup" }.startSession(
                     projectId = activeProjectId,
@@ -1264,7 +1264,11 @@ private fun LeanEditorScreen(
                             Text("▣", modifier = Modifier.semantics { contentDescription = "Files menu" })
                         }
                         DropdownMenu(expanded = filesMenu, onDismissRequest = { filesMenu = false }) {
-                            DropdownMenuItem(text = { Text("＋  New") }, enabled = !running, onClick = { filesMenu = false; requestedPath = "New.lean"; fileAction = "New source" })
+                            DropdownMenuItem(text = { Text("＋  New") }, enabled = !running, onClick = {
+                                filesMenu = false
+                                requestedPath = LeanProjectRepository.defaultNewSourcePath(editor.projectId)
+                                fileAction = "New source"
+                            })
                             DropdownMenuItem(text = { Text("▣  New Project") }, enabled = !running, onClick = {
                                 filesMenu = false; newProjectName = ""; newProjectError = null; newProjectDialog = true
                             })
@@ -1313,7 +1317,8 @@ private fun LeanEditorScreen(
                     }
                 },
         ) {
-            val workspaceModifier = Modifier.fillMaxSize().padding(12.dp)
+            val dimensions = LeanTheme.dimensions
+            val workspaceModifier = Modifier.fillMaxSize().padding(dimensions.workspacePadding)
             val density = LocalDensity.current
             val workspaceWidthDp = maxWidth.value
             val workspaceHeightDp = maxHeight.value
@@ -1394,15 +1399,19 @@ private fun LeanEditorScreen(
             }
             if (drawerOpen) {
                 androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().clickable { drawerOpen = false })
-                Surface(Modifier.width(300.dp).fillMaxHeight().clickable { }, tonalElevation = 8.dp) {
-                    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(
+                    Modifier.width(dimensions.drawerWidth).fillMaxHeight().clickable { },
+                    shape = LeanTheme.components.shell.drawerShape,
+                    tonalElevation = dimensions.drawerElevation,
+                ) {
+                    Column(Modifier.fillMaxSize().padding(dimensions.drawerPadding), verticalArrangement = Arrangement.spacedBy(dimensions.drawerItemSpacing)) {
                         TextButton(onClick = { projectExpanded = !projectExpanded }) {
                             Text((if (projectExpanded) "▾" else "▸") + " Project")
                         }
                         if (projectExpanded) {
                             val compactLandscape = useCompactLandscapeTreeFloor(workspaceWidthDp, workspaceHeightDp, projectExpanded)
                             ProjectTree(
-                                modifier = if (compactLandscape) Modifier.fillMaxWidth().height(120.dp) else Modifier.fillMaxWidth().weight(1f),
+                                modifier = if (compactLandscape) Modifier.fillMaxWidth().height(dimensions.compactProjectTreeHeight) else Modifier.fillMaxWidth().weight(1f),
                                 paths = projectFiles,
                                 activePath = editor.activePath,
                                 dirtyPaths = editor.tabs.filter(EditorTab::dirty).map(EditorTab::path).toSet(),
@@ -1431,9 +1440,9 @@ private fun LeanEditorScreen(
                         }
                         val compactLandscape = useCompactLandscapeTreeFloor(workspaceWidthDp, workspaceHeightDp, projectExpanded)
                         Column(
-                            (if (compactLandscape) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(max = 320.dp))
+                            (if (compactLandscape) Modifier.fillMaxWidth().weight(1f) else Modifier.fillMaxWidth().heightIn(max = dimensions.projectActionsMaxHeight))
                                 .verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalArrangement = Arrangement.spacedBy(dimensions.compactSpacing),
                         ) {
                             TextButton(enabled = !running, onClick = { drawerOpen = false; buildProject() }) { Text("Build project") }
                             TextButton(enabled = !running, onClick = { drawerOpen = false; runState = EditorRunState.Running; onVerifyRuntime { runState = it } }) { Text("Verify runtime") }
@@ -1463,12 +1472,14 @@ private fun LeanEditorScreen(
 
     if (openWorkspace) {
         Dialog(onDismissRequest = { openWorkspace = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
+            val dimensions = LeanTheme.dimensions
+            val shellStyle = LeanTheme.components.shell
+            Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().padding(dimensions.screenPadding).verticalScroll(rememberScrollState())) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Open workspace", style = MaterialTheme.typography.headlineSmall)
+                    Text("Open workspace", style = shellStyle.screenHeadingStyle)
                     TextButton(onClick = { openWorkspace = false }) { Text("Back") }
                 }
-                Text("Recent", style = MaterialTheme.typography.titleSmall)
+                Text("Recent", style = shellStyle.sectionHeadingStyle)
                 if (recentProjects.isEmpty()) Text("No recent projects")
                 recentProjects.forEach { id -> ProjectOpenRow(
                     id = id,
@@ -1476,7 +1487,7 @@ private fun LeanEditorScreen(
                     onRename = { renameProjectTarget = id; lifecycleName = id; lifecycleError = null },
                     onDelete = { deleteProjectTarget = id; lifecycleError = null },
                 ) }
-                Text("My Projects", style = MaterialTheme.typography.titleSmall)
+                Text("My Projects", style = shellStyle.sectionHeadingStyle)
                 projects.forEach { id -> ProjectOpenRow(
                     id = id,
                     onOpen = { openWorkspace = false; onOpenProject(id) },
@@ -1489,7 +1500,7 @@ private fun LeanEditorScreen(
                 TextButton(onClick = {
                     openWorkspace = false; newProjectName = ""; newProjectError = null; newProjectDialog = true
                 }) { Text("New Project") }
-                Text("Projects are app-managed copies and are removed on uninstall. Export important work.", style = MaterialTheme.typography.bodySmall)
+                Text("Projects are app-managed copies and are removed on uninstall. Export important work.", style = shellStyle.supportingStyle)
             } }
         }
     }
@@ -1613,10 +1624,12 @@ private fun LeanEditorScreen(
     settingsPage?.let { page ->
         Dialog(onDismissRequest = { settingsPage = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Surface(Modifier.fillMaxSize()) {
-                Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                val dimensions = LeanTheme.dimensions
+                val shellStyle = LeanTheme.components.shell
+                Column(Modifier.fillMaxSize().padding(dimensions.screenPadding), verticalArrangement = Arrangement.spacedBy(dimensions.sectionSpacing)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = { settingsPage = if (page == "settings") null else "settings" }) { Text("Back") }
-                        Text(when (page) { "appearance" -> "Appearance"; "editor" -> "Editor"; else -> "Settings" }, style = MaterialTheme.typography.headlineSmall)
+                        Text(when (page) { "appearance" -> "Appearance"; "editor" -> "Editor"; else -> "Settings" }, style = shellStyle.screenHeadingStyle)
                     }
                     if (page == "settings") {
                         TextButton(
@@ -1629,11 +1642,11 @@ private fun LeanEditorScreen(
                         ) { Text("Editor") }
                     } else if (page == "appearance") {
                         Row(
-                            Modifier.fillMaxWidth().clickable { onDarkThemeChanged(!darkTheme) }.padding(vertical = 8.dp),
+                            Modifier.fillMaxWidth().clickable { onDarkThemeChanged(!darkTheme) }.padding(vertical = dimensions.settingsRowPadding),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column { Text("Dark theme"); Text("Use dark colors throughout the app", style = MaterialTheme.typography.bodySmall) }
+                            Column { Text("Dark theme"); Text("Use dark colors throughout the app", style = shellStyle.supportingStyle) }
                             Switch(
                                 checked = darkTheme,
                                 onCheckedChange = onDarkThemeChanged,
@@ -1650,7 +1663,7 @@ private fun LeanEditorScreen(
                             Row(
                                 Modifier.fillMaxWidth()
                                     .clickable { onGoalsPanePositionChanged(position) }
-                                    .padding(vertical = 8.dp)
+                                    .padding(vertical = dimensions.settingsRowPadding)
                                     .semantics { contentDescription = "Goals pane position: $label" },
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -1658,7 +1671,7 @@ private fun LeanEditorScreen(
                                 Column {
                                     Text(label)
                                     if (position == GoalsPanePosition.Auto) {
-                                        Text("Bottom in portrait, right side in landscape", style = MaterialTheme.typography.bodySmall)
+                                        Text("Bottom in portrait, right side in landscape", style = shellStyle.supportingStyle)
                                     }
                                 }
                             }
@@ -1760,10 +1773,17 @@ private fun EditorFilePanel(
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val dimensions = LeanTheme.dimensions
+    val shellStyle = LeanTheme.components.shell
     if (vertical) {
-        Surface(modifier = modifier, color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
-            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Project files", style = MaterialTheme.typography.titleSmall)
+        Surface(
+            modifier = modifier,
+            color = shellStyle.projectCardColor,
+            contentColor = shellStyle.projectCardContentColor,
+            shape = shellStyle.projectCardShape,
+        ) {
+            Column(Modifier.padding(dimensions.standardSpacing), verticalArrangement = Arrangement.spacedBy(dimensions.smallSpacing)) {
+                Text("Project files", style = shellStyle.sectionHeadingStyle)
                 editor.tabs.forEach { tab ->
                     TextButton(
                         modifier = Modifier.fillMaxWidth().semantics {
@@ -1778,10 +1798,10 @@ private fun EditorFilePanel(
             }
         }
     } else {
-        Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(dimensions.compactSpacing)) {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(dimensions.standardSpacing),
             ) {
                 editor.tabs.forEach { tab ->
                     Button(
@@ -1852,9 +1872,15 @@ private fun EditorContent(
     onOutputDrag: (Float) -> Unit,
     onOutputStep: (Float) -> Unit,
 ) {
+    val dimensions = LeanTheme.dimensions
+    val shellStyle = LeanTheme.components.shell
     if (editor.activePath == null) {
-        Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Surface(
+            modifier.fillMaxSize(),
+            color = shellStyle.emptyEditorColor,
+            contentColor = shellStyle.emptyEditorContentColor,
+        ) {
+            Column(Modifier.padding(dimensions.screenPadding), verticalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
                 Text("No file open", style = MaterialTheme.typography.titleMedium)
                 Text("Use Files → New or Open, or choose a file from the Project drawer.")
                 OutputPanel(runState)
@@ -1872,7 +1898,7 @@ private fun EditorContent(
         TextRange(offsetAtLspPosition(value.text, start), offsetAtLspPosition(value.text, end))
     }
     val messagesHaveError = diagnosticSetHasError(activeDiagnostics.map(LspDiagnosticUi::severity))
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
         FileTabStrip(
             editor = editor,
             enabled = !running,
@@ -1883,7 +1909,7 @@ private fun EditorContent(
         if (searchVisible) {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(dimensions.smallSpacing),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 OutlinedTextField(
@@ -1891,7 +1917,7 @@ private fun EditorContent(
                     onValueChange = onSearchQuery,
                     singleLine = true,
                     label = { Text("Find in file") },
-                    modifier = Modifier.width(240.dp).semantics { contentDescription = "Find text in current Lean file" },
+                    modifier = Modifier.width(dimensions.findFieldWidth).semantics { contentDescription = "Find text in current Lean file" },
                 )
                 Text("${matches.size} matches")
                 TextButton(enabled = matches.isNotEmpty(), onClick = onSearchPrevious) { Text("Previous") }
@@ -1902,12 +1928,12 @@ private fun EditorContent(
         val editorScroll = rememberScrollState()
         val editorStyle = LeanTheme.components.editor
         Surface(Modifier.fillMaxWidth().weight(1f - outputFraction), color = editorStyle.containerColor, shape = editorStyle.shape) {
-            Row(Modifier.fillMaxSize().verticalScroll(editorScroll).padding(vertical = 12.dp)) {
+            Row(Modifier.fillMaxSize().verticalScroll(editorScroll).padding(vertical = dimensions.editorVerticalPadding)) {
                 Text(
                     editorLineNumbers(value.text),
                     modifier = Modifier
                         .background(editorStyle.gutterColor)
-                        .padding(horizontal = 10.dp)
+                        .padding(horizontal = dimensions.editorGutterHorizontalPadding)
                         .semantics { contentDescription = "Line numbers" },
                     color = editorStyle.gutterContentColor,
                     style = editorStyle.codeStyle,
@@ -1915,7 +1941,7 @@ private fun EditorContent(
                 var sourceModifier = Modifier
                     .weight(1f)
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp)
+                    .padding(horizontal = dimensions.editorSourceHorizontalPadding)
                     .semantics {
                         contentDescription = "Lean source editor for ${editor.activePath}"
                         stateDescription = if (editor.tabs.single { it.path == editor.activePath }.dirty) "Unsaved changes" else "Saved"
@@ -1950,7 +1976,7 @@ private fun EditorContent(
                 onCursorChanged(editor.activePath, updated.text, updated.selection.start)
             },
         )
-        if (running) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (running) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
             CircularProgressIndicator()
             Text("Working…")
             TextButton(onClick = onCancel) { Text("Cancel") }
@@ -2009,13 +2035,15 @@ private fun ProjectTree(
     onRenameEntry: (String) -> Unit,
     onDeleteEntry: (String) -> Unit,
 ) {
+    val dimensions = LeanTheme.dimensions
+    val style = LeanTheme.components.projectTree
     val horizontal = rememberScrollState()
     val vertical = rememberScrollState()
     var menuPath by remember { mutableStateOf<String?>(null) }
-    Surface(modifier, color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
+    Surface(modifier, color = style.containerColor, contentColor = style.contentColor, shape = style.shape) {
         Column(
-            Modifier.fillMaxSize().horizontalScroll(horizontal).verticalScroll(vertical).padding(vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            Modifier.fillMaxSize().horizontalScroll(horizontal).verticalScroll(vertical).padding(vertical = dimensions.projectTreeVerticalPadding),
+            verticalArrangement = Arrangement.spacedBy(dimensions.compactSpacing),
         ) {
             projectTreeRows(paths, expandedFolders).forEach { row ->
                 val selected = row.path == activePath
@@ -2026,13 +2054,18 @@ private fun ProjectTree(
                             onClick = { if (row.expandable) onToggleFolder(row.path) else onOpenFile(row.path) },
                             onLongClick = { menuPath = row.path },
                         )
-                        .padding(start = (8 + row.depth * 16).dp, end = 12.dp, top = 7.dp, bottom = 7.dp)
+                        .padding(
+                            start = dimensions.projectTreeBaseIndent + dimensions.projectTreeDepthIndent * row.depth,
+                            end = dimensions.projectTreeEndPadding,
+                            top = dimensions.projectTreeRowVerticalPadding,
+                            bottom = dimensions.projectTreeRowVerticalPadding,
+                        )
                         .semantics {
                             contentDescription = if (row.expandable) "${if (row.path in expandedFolders) "Collapse" else "Expand"} folder ${row.path}" else "Open ${row.path}"
                             stateDescription = if (selected) "Selected" else "Not selected"
                         },
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(dimensions.standardSpacing),
                     ) {
                         Text(
                             when (row.icon) {
@@ -2233,12 +2266,13 @@ private fun FileTabStrip(
 @Composable
 private fun ProjectOpenRow(id: String, onOpen: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
+    val dimensions = LeanTheme.dimensions
     androidx.compose.foundation.layout.Box {
         Text(
             id,
             modifier = Modifier
                 .combinedClickable(onClick = onOpen, onLongClick = { menuOpen = true })
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .padding(horizontal = dimensions.projectRowHorizontalPadding, vertical = dimensions.projectRowVerticalPadding)
                 .semantics { contentDescription = "Open project $id" },
         )
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {

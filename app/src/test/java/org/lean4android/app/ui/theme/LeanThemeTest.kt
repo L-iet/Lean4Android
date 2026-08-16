@@ -19,6 +19,9 @@ class LeanThemeTest {
         assertEquals(16.dp, dimensions.splitterThickness)
         assertEquals(100.dp, dimensions.outputMinHeight)
         assertEquals(200.dp, dimensions.outputMaxHeight)
+        assertEquals(24.dp, dimensions.screenPadding)
+        assertEquals(16.dp, dimensions.projectTreeDepthIndent)
+        assertEquals(8.dp, dimensions.hoverCodePadding)
     }
 
     @Test
@@ -30,5 +33,8 @@ class LeanThemeTest {
         assertTrue(dimensions.messagesCollapseButtonSize > 0.dp)
         assertTrue(dimensions.outputMinHeight > 0.dp)
         assertTrue(dimensions.outputMaxHeight >= dimensions.outputMinHeight)
+        assertTrue(dimensions.projectTreeDepthIndent > 0.dp)
+        assertTrue(dimensions.projectTreeRowVerticalPadding > 0.dp)
+        assertTrue(dimensions.hoverBlockSpacing > 0.dp)
     }
 }

@@ -459,6 +459,8 @@ Implement this in the foreground product lane without waiting for the targeted `
 
 Exit: a user can create, import, save, rename, move, and delete Lean modules anywhere within the supported project tree; Lake and Lean Server use a deterministic up-to-date module configuration; Files → New defaults to the generated inner project directory without preventing top-level placement; and existing supported projects migrate without data loss.
 
+Implementation checkpoint (2026-08-16): the centralized reconciler, lifecycle/import/save triggers, supported legacy migration, module validation, derived New prefill, Build/Run and LSP drift recovery, host tests, and APK assembly are implemented. The pinned Lake schema audit confirms explicit `globs` must contain both top-level roots and directory wildcards. Physical offline migration/Lake/LSP/recreation validation remains pending because the reference tablet is detached; do not mark this corrective complete from host evidence alone.
+
 ### M5.0 — Near-term output and completion UX
 
 Implement these in the listed priority order after the focused M5 Mathlib compatibility/feasibility gate and before the broader M5.1 editor expansion.

@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -19,7 +18,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.unit.dp
+import org.lean4android.app.ui.theme.LeanTheme
 
 internal sealed interface HoverMarkdownBlock {
     data class Heading(val level: Int, val text: String) : HoverMarkdownBlock
@@ -108,27 +107,30 @@ internal fun hoverInlineMarkdown(
 @Composable
 internal fun HoverMarkdown(markdown: String) {
     val blocks = parseHoverMarkdown(markdown)
+    val style = LeanTheme.components.hover
+    val dimensions = LeanTheme.dimensions
     SelectionContainer {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(dimensions.hoverBlockSpacing)) {
             blocks.forEach { block ->
                 when (block) {
                     is HoverMarkdownBlock.Heading -> Text(
-                        hoverInlineMarkdown(block.text, linkColor = MaterialTheme.colorScheme.primary),
-                        style = if (block.level <= 2) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall,
+                        hoverInlineMarkdown(block.text, linkColor = style.linkColor),
+                        style = if (block.level <= 2) style.largeHeadingStyle else style.smallHeadingStyle,
                     )
                     is HoverMarkdownBlock.Paragraph -> Text(
-                        hoverInlineMarkdown(block.text, linkColor = MaterialTheme.colorScheme.primary),
-                        style = MaterialTheme.typography.bodySmall,
+                        hoverInlineMarkdown(block.text, linkColor = style.linkColor),
+                        style = style.bodyStyle,
                     )
                     is HoverMarkdownBlock.ListItem -> Text(
-                        hoverInlineMarkdown("• ${block.text}", linkColor = MaterialTheme.colorScheme.primary),
-                        style = MaterialTheme.typography.bodySmall,
+                        hoverInlineMarkdown("• ${block.text}", linkColor = style.linkColor),
+                        style = style.bodyStyle,
                     )
                     is HoverMarkdownBlock.Code -> Text(
                         if (block.language == "lean" || block.language == "lean4") leanHighlightedText(block.source)
                         else AnnotatedString(block.source),
-                        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(8.dp),
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        modifier = Modifier.fillMaxWidth().background(style.codeContainerColor).padding(dimensions.hoverCodePadding),
+                        color = style.codeContentColor,
+                        style = style.codeStyle,
                     )
                 }
             }

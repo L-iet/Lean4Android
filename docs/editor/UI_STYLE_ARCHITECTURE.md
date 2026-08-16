@@ -1,6 +1,6 @@
 # UI style and theme architecture
 
-Status: proposed decision and staged implementation plan
+Status: staged implementation in progress; root/editor/pane/shell/tree/hover styles migrated, physical completion pending
 
 Milestone: M5 foreground architecture prerequisite
 

@@ -33,6 +33,24 @@ data class LeanDimensions(
     val splitterThickness: Dp = 16.dp,
     val outputMinHeight: Dp = 100.dp,
     val outputMaxHeight: Dp = 200.dp,
+    val compactSpacing: Dp = 2.dp,
+    val smallSpacing: Dp = 6.dp,
+    val standardSpacing: Dp = 8.dp,
+    val sectionSpacing: Dp = 16.dp,
+    val drawerElevation: Dp = 8.dp,
+    val settingsRowPadding: Dp = 8.dp,
+    val editorVerticalPadding: Dp = 12.dp,
+    val editorGutterHorizontalPadding: Dp = 10.dp,
+    val editorSourceHorizontalPadding: Dp = 12.dp,
+    val projectTreeVerticalPadding: Dp = 4.dp,
+    val projectTreeBaseIndent: Dp = 8.dp,
+    val projectTreeDepthIndent: Dp = 16.dp,
+    val projectTreeEndPadding: Dp = 12.dp,
+    val projectTreeRowVerticalPadding: Dp = 7.dp,
+    val projectRowHorizontalPadding: Dp = 12.dp,
+    val projectRowVerticalPadding: Dp = 10.dp,
+    val hoverBlockSpacing: Dp = 6.dp,
+    val hoverCodePadding: Dp = 8.dp,
 )
 
 @Immutable
@@ -84,6 +102,37 @@ data class EditorStyle(
 )
 
 @Immutable
+data class ShellStyle(
+    val drawerShape: Shape,
+    val projectCardColor: Color,
+    val projectCardContentColor: Color,
+    val projectCardShape: Shape,
+    val emptyEditorColor: Color,
+    val emptyEditorContentColor: Color,
+    val screenHeadingStyle: TextStyle,
+    val sectionHeadingStyle: TextStyle,
+    val supportingStyle: TextStyle,
+)
+
+@Immutable
+data class ProjectTreeStyle(
+    val containerColor: Color,
+    val contentColor: Color,
+    val shape: Shape,
+)
+
+@Immutable
+data class HoverStyle(
+    val linkColor: Color,
+    val codeContainerColor: Color,
+    val codeContentColor: Color,
+    val largeHeadingStyle: TextStyle,
+    val smallHeadingStyle: TextStyle,
+    val bodyStyle: TextStyle,
+    val codeStyle: TextStyle,
+)
+
+@Immutable
 data class LeanComponentStyles(
     val editor: EditorStyle,
     val goals: PaneStyle,
@@ -93,6 +142,9 @@ data class LeanComponentStyles(
     val splitter: SplitterStyle,
     val tabs: TabStyle,
     val symbolRow: SymbolRowStyle,
+    val shell: ShellStyle,
+    val projectTree: ProjectTreeStyle,
+    val hover: HoverStyle,
 )
 
 private val LocalLeanDimensions = staticCompositionLocalOf { LeanDimensions() }
@@ -186,6 +238,31 @@ fun Lean4AndroidTheme(
                 horizontalContentPadding = 7.dp,
                 verticalContentPadding = 0.dp,
                 textStyle = typography.labelLarge.copy(fontFamily = FontFamily.Monospace),
+            ),
+            shell = ShellStyle(
+                drawerShape = shapes.extraSmall,
+                projectCardColor = colors.surfaceVariant,
+                projectCardContentColor = colors.onSurfaceVariant,
+                projectCardShape = shapes.medium,
+                emptyEditorColor = colors.surfaceVariant,
+                emptyEditorContentColor = colors.onSurfaceVariant,
+                screenHeadingStyle = typography.headlineSmall,
+                sectionHeadingStyle = typography.titleSmall,
+                supportingStyle = typography.bodySmall,
+            ),
+            projectTree = ProjectTreeStyle(
+                containerColor = colors.surfaceVariant,
+                contentColor = colors.onSurfaceVariant,
+                shape = shapes.small,
+            ),
+            hover = HoverStyle(
+                linkColor = colors.primary,
+                codeContainerColor = colors.surface,
+                codeContentColor = colors.onSurface,
+                largeHeadingStyle = typography.titleMedium,
+                smallHeadingStyle = typography.titleSmall,
+                bodyStyle = typography.bodySmall,
+                codeStyle = codeBody,
             ),
         )
         CompositionLocalProvider(

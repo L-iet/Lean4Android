@@ -36,11 +36,20 @@ class LeanProjectRepository(
         private const val MAX_PROJECT_FILE_BYTES = 64L * 1024 * 1024
         private const val MAX_PROJECT_BYTES = 256L * 1024 * 1024
         private val SAFE_ID = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+        private val LEAN_MODULE_COMPONENT = Regex("[A-Za-z][A-Za-z0-9_]*")
+        private val GENERATED_LEAN_LIB = Regex("(?ms)^\\[\\[lean_lib]]\\s*\\n(.*?)(?=^\\[|\\z)")
+        private val GENERATED_LEAN_LIB_LINE = Regex("(name|roots|globs)\\s*=.*")
         private val UNSUPPORTED_LAKE = Regex(
             "(?im)\\b(lean_exe|extern_lib|require\\s+.+\\s+from\\s+(git|\"https?://)|git|curl|wget)\\b",
         )
 
         fun normalizeProjectId(name: String): String = name.trim().replace(Regex("\\s+"), "-")
+
+        fun leanName(id: String): String = id.split(Regex("[^A-Za-z0-9]+"))
+            .filter(String::isNotEmpty).joinToString("") { it.replaceFirstChar(Char::uppercase) }
+            .ifEmpty { "Project" }
+
+        fun defaultNewSourcePath(projectId: String): String = "${leanName(projectId)}/New.lean"
     }
 
     fun create(id: String): LeanProject {
@@ -56,13 +65,11 @@ class LeanProjectRepository(
             staging.mkdirs()
             atomicWrite(staging.resolve(METADATA), "schema=1\ntoolchain=$toolchainId\n")
             atomicWrite(staging.resolve("lean-toolchain"), "$leanToolchainSpec\n")
-            atomicWrite(
-                staging.resolve("lakefile.toml"),
-                "name = \"${leanName(id)}\"\nversion = \"0.1.0\"\ndefaultTargets = [\"${leanName(id)}\"]\n\n[[lean_lib]]\nname = \"${leanName(id)}\"\nroots = [\"Main\", \"${leanName(id)}.Basic\"]\n",
-            )
+            atomicWrite(staging.resolve("lakefile.toml"), defaultLakefile(id))
             val module = leanName(id)
             atomicWrite(staging.resolve("$module/Basic.lean"), defaultLibrary(module))
             atomicWrite(staging.resolve("Main.lean"), defaultMain(module))
+            reconcileLakeConfiguration(staging, id)
             Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
         } catch (failure: Throwable) {
             deleteTree(staging)
@@ -99,14 +106,22 @@ class LeanProjectRepository(
             "Project already exists (case-insensitive): $newId"
         }
         Files.move(project.directory.toPath(), root.resolve(newId).toPath(), StandardCopyOption.ATOMIC_MOVE)
-        return open(newId)
+        return try {
+            reconcileLakeConfiguration(newId)
+        } catch (failure: Throwable) {
+            Files.move(root.resolve(newId).toPath(), project.directory.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            throw failure
+        }
     }
 
     fun save(projectId: String, relativePath: String, contents: String) {
         val project = open(projectId)
         val destination = resolveContained(project.directory, relativePath)
         require(destination.extension == "lean") { "Only Lean source files can be edited" }
+        validateLeanSourcePath(relativePath)
+        requireReconciliableLakefile(project.directory)
         atomicWrite(destination, contents)
+        reconcileLakeConfiguration(project.directory, projectId)
     }
 
     fun read(projectId: String, relativePath: String): String {
@@ -120,9 +135,11 @@ class LeanProjectRepository(
         val project = open(projectId)
         val destination = resolveContained(project.directory, relativePath)
         require(destination.extension == "lean") { "Only Lean source files can be created" }
+        validateLeanSourcePath(relativePath)
+        requireReconciliableLakefile(project.directory)
         requireNoCaseFoldedCollision(project, relativePath)
         atomicWrite(destination, contents)
-        return open(projectId)
+        return reconcileLakeConfiguration(projectId)
     }
 
     /** Save As: creates a new source with the supplied bytes and leaves the original untouched. */
@@ -132,9 +149,11 @@ class LeanProjectRepository(
         require(source.isFile && source.extension == "lean") { "Lean source does not exist: $sourcePath" }
         val destination = resolveContained(project.directory, destinationPath)
         require(destination.extension == "lean") { "Only Lean source files can be created" }
+        validateLeanSourcePath(destinationPath)
+        requireReconciliableLakefile(project.directory)
         requireNoCaseFoldedCollision(project, destinationPath)
         atomicWrite(destination, contents)
-        return open(projectId)
+        return reconcileLakeConfiguration(projectId)
     }
 
     fun renameSource(projectId: String, oldPath: String, newPath: String): LeanProject {
@@ -152,6 +171,8 @@ class LeanProjectRepository(
         require(!source.isFile || (source.extension == "lean" && destination.extension == "lean")) {
             "Lean source files must keep the .lean extension"
         }
+        movedLeanPaths(project, oldPath, newPath).forEach(::validateLeanSourcePath)
+        requireReconciliableLakefile(project.directory)
         require(oldPath != newPath) { "Enter a different project-relative path" }
         require(!source.isDirectory || !destination.toPath().startsWith(source.toPath())) {
             "A folder cannot be moved inside itself"
@@ -174,7 +195,7 @@ class LeanProjectRepository(
         destination.parentFile?.mkdirs()
         Files.move(source.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
         removeEmptyParents(source.parentFile, project.directory)
-        return open(projectId)
+        return reconcileLakeConfiguration(projectId)
     }
 
     fun deleteSource(projectId: String, relativePath: String): LeanProject {
@@ -191,9 +212,10 @@ class LeanProjectRepository(
         val removedSources = project.sourceFiles.filter { it == relativePath || it.startsWith(prefix) }
         require(removedSources.isNotEmpty()) { "Only folders containing Lean sources can be deleted here" }
         require(project.sourceFiles.size > removedSources.size) { "A project must keep at least one Lean source file" }
+        requireReconciliableLakefile(project.directory)
         if (entry.isDirectory) deleteTree(entry) else Files.delete(entry.toPath())
         removeEmptyParents(entry.parentFile, project.directory)
-        return open(projectId)
+        return reconcileLakeConfiguration(projectId)
     }
 
     fun delete(id: String) {
@@ -261,6 +283,7 @@ class LeanProjectRepository(
             }
             validateMetadata(staging)
             validateSupportedWorkflow(staging)
+            reconcileLakeConfiguration(staging, id)
             Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
         } catch (failure: Throwable) {
             deleteTree(staging)
@@ -305,6 +328,7 @@ class LeanProjectRepository(
             })
             validateMetadata(staging)
             validateSupportedWorkflow(staging)
+            reconcileLakeConfiguration(staging, id)
             Files.move(staging.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
         } catch (failure: Throwable) {
             deleteTree(staging)
@@ -335,15 +359,100 @@ class LeanProjectRepository(
     }
 
     fun lakeBuild(factory: ToolchainCommandFactory, id: String, timeout: Duration = 5.minutes): ProcessCommand {
-        val project = open(id)
+        val project = reconcileLakeConfiguration(id)
         return factory.lake(listOf("build"), project.directory, timeout)
     }
 
     fun lakeLean(factory: ToolchainCommandFactory, id: String, source: String, timeout: Duration = 2.minutes): ProcessCommand {
-        val project = open(id)
+        val project = reconcileLakeConfiguration(id)
         val file = resolveContained(project.directory, source)
         require(file.isFile && file.extension == "lean") { "Lean source does not exist: $source" }
         return factory.lake(listOf("lean", source), project.directory, timeout)
+    }
+
+    fun reconcileLakeConfiguration(projectId: String): LeanProject {
+        val project = open(projectId)
+        reconcileLakeConfiguration(project.directory, projectId)
+        return open(projectId)
+    }
+
+    private fun reconcileLakeConfiguration(directory: File, projectId: String) {
+        val lakefile = directory.resolve("lakefile.toml")
+        val current = lakefile.readText()
+        val match = requireReconciliableLakefile(directory)
+        Files.walk(directory.toPath()).use { paths ->
+            paths.filter { path ->
+                Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) && path.fileName.toString().endsWith(".lean")
+            }.map { directory.toPath().relativize(it).toString().replace(File.separatorChar, '/') }
+                .forEach(::validateLeanSourcePath)
+        }
+        val roots = directory.listFiles().orEmpty()
+            .filter { it.isFile && it.extension == "lean" }
+            .map { it.nameWithoutExtension }
+            .sorted()
+        val directoryGlobs = directory.listFiles().orEmpty()
+            .filter { candidate ->
+                candidate.isDirectory && !Files.isSymbolicLink(candidate.toPath()) && !candidate.name.startsWith('.') &&
+                    Files.walk(candidate.toPath()).use { paths ->
+                        paths.anyMatch { path ->
+                            Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) && path.fileName.toString().endsWith(".lean")
+                        }
+                    }
+            }
+            .map { "${it.name}.*" }
+            .sorted()
+        val globs = roots + directoryGlobs
+        require(globs.isNotEmpty()) { "Project has no buildable Lean modules" }
+        val module = leanName(projectId)
+        val block = buildString {
+            append("[[lean_lib]]\n")
+            append("name = \"").append(module).append("\"\n")
+            if (roots.isNotEmpty()) append("roots = ").append(tomlArray(roots)).append('\n')
+            append("globs = ").append(tomlArray(globs)).append('\n')
+        }
+        var canonical = current.replaceRange(match.range, block)
+        canonical = canonical.replaceFirst(Regex("(?m)^name\\s*=\\s*\"[A-Za-z][A-Za-z0-9_]*\"\\s*$"), "name = \"$module\"")
+        canonical = canonical.replaceFirst(Regex("(?m)^defaultTargets\\s*=\\s*\\[[^]\\r\\n]*]\\s*$"), "defaultTargets = [\"$module\"]")
+        if (canonical != current) atomicWrite(lakefile, canonical)
+    }
+
+    private fun requireReconciliableLakefile(directory: File): MatchResult {
+        val lakefile = directory.resolve("lakefile.toml")
+        require(lakefile.isFile) { "lakefile.toml is missing" }
+        val contents = lakefile.readText()
+        val matches = GENERATED_LEAN_LIB.findAll(contents).toList()
+        if (matches.size != 1) throw UnsupportedProjectException(
+            "This Lake configuration cannot be updated safely; expected one generated lean_lib block",
+        )
+        val lines = matches.single().groupValues[1].lineSequence()
+            .map(String::trim).filter { it.isNotEmpty() && !it.startsWith('#') }.toList()
+        if (lines.any { !GENERATED_LEAN_LIB_LINE.matches(it) } || lines.count { it.startsWith("name") } != 1) {
+            throw UnsupportedProjectException("This Lake library configuration requires manual repair")
+        }
+        return matches.single()
+    }
+
+    private fun validateLeanSourcePath(relativePath: String) {
+        require(relativePath.endsWith(".lean")) { "Lean module paths must end in .lean" }
+        val modulePath = relativePath.removeSuffix(".lean").replace('\\', '/')
+        require(modulePath.split('/').all(LEAN_MODULE_COMPONENT::matches)) {
+            "Lean module path components must start with a letter and contain only letters, numbers, or underscores: $relativePath"
+        }
+    }
+
+    private fun movedLeanPaths(project: LeanProject, oldPath: String, newPath: String): List<String> {
+        val sourcePrefix = oldPath.trimEnd('/') + "/"
+        val destinationPrefix = newPath.trimEnd('/') + "/"
+        return project.sourceFiles.filter { it == oldPath || it.startsWith(sourcePrefix) }
+            .map { if (it == oldPath) newPath else destinationPrefix + it.removePrefix(sourcePrefix) }
+    }
+
+    private fun tomlArray(values: List<String>): String = values.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
+
+    private fun defaultLakefile(id: String): String {
+        val module = leanName(id)
+        return "name = \"$module\"\nversion = \"0.1.0\"\ndefaultTargets = [\"$module\"]\n\n" +
+            "[[lean_lib]]\nname = \"$module\"\nroots = [\"Main\"]\nglobs = [\"Main\", \"$module.*\"]\n"
     }
 
     private fun validateMetadata(directory: File) {
@@ -456,10 +565,6 @@ class LeanProjectRepository(
             }
         })
     }
-
-    private fun leanName(id: String) = id.split(Regex("[^A-Za-z0-9]+"))
-        .filter(String::isNotEmpty).joinToString("") { it.replaceFirstChar(Char::uppercase) }
-        .ifEmpty { "Project" }
 
     private fun defaultMain(module: String) = """namespace $module.Main
 
