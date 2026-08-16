@@ -145,11 +145,11 @@ Use Kotlin, coroutines/Flow, Jetpack Compose, Room only for app metadata, and or
 
 ### 3.1 Editor choice
 
-Run a short prototype comparing a native Android code editor with CodeMirror 6 in a WebView. Select using measured requirements: incremental document edits, Unicode, large-file behavior, IME correctness, hardware-keyboard shortcuts, diagnostic decorations, completion UI, accessibility, and bidirectional Kotlin communication.
+The M3 bake-off selected a native Jetpack Compose editor. The production UI uses Compose UI, Foundation, and Material 3; the editor is built from `BasicTextField`, annotated text, and project-owned state and behavior. Do not introduce a WebView, browser-based editor, JavaScript bridge, or web asset/runtime stack for ordinary editor or application UI work.
 
-If CodeMirror wins, keep the bridge small and typed. JavaScript sends document edits and user actions; Kotlin owns files, processes, and LSP. Never expose a broad `addJavascriptInterface` object or filesystem paths to untrusted page content. Bundle all web assets and disable remote navigation/file access.
+Keep the UI dependency set deliberately small. Prefer existing Compose and Android platform primitives, plus focused project-owned code, when the behavior is reasonably bounded. Add another UI framework or library only when it solves a specific demonstrated problem substantially better and implementing the equivalent correctly in this repository would require a large, unnecessary body of code. Document the problem, expected maintenance/size/security cost, considered native approach, and validation boundary before adoption. WebView or other web-related dependencies require especially strong justification because they add a second UI/runtime model and expand packaging, accessibility, security, offline, and lifecycle obligations.
 
-Before that bake-off, M1 includes a deliberately disposable native Compose visual probe: one fixed `Main.lean`, a multiline plain-text field, explicit Check action, and selectable process output. It validates the end-to-end edit/save/Lean/result interaction on a real device without prematurely choosing the production editor or coupling UI state to Lake/LSP architecture. It is not the M3 editor and should not grow a project tree, syntax engine, or live protocol client.
+This policy does not require reimplementing a mature specialist component merely to avoid a dependency. A narrowly scoped library is acceptable when its benefit clearly outweighs its footprint and integration cost, it works fully offline, and it preserves typed Kotlin ownership of files, processes, toolchains, and LSP state.
 
 ### 3.2 Process supervision
 
