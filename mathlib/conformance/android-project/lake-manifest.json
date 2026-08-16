@@ -1,0 +1,89 @@
+{
+  "version": "1.2.0",
+  "packagesDir": ".lake/packages",
+  "packages": [
+    {
+      "type": "path",
+      "name": "mathlib",
+      "scope": "leanprover-community",
+      "inherited": false,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe",
+      "configFile": "lakefile.lean",
+      "manifestFile": "lake-manifest.json"
+    },
+    {
+      "type": "path",
+      "name": "plausible",
+      "scope": "leanprover-community",
+      "inherited": true,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe/.lake/packages/plausible",
+      "configFile": "lakefile.toml",
+      "manifestFile": "lake-manifest.json"
+    },
+    {
+      "type": "path",
+      "name": "LeanSearchClient",
+      "scope": "leanprover-community",
+      "inherited": true,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe/.lake/packages/LeanSearchClient",
+      "configFile": "lakefile.toml",
+      "manifestFile": "lake-manifest.json"
+    },
+    {
+      "type": "path",
+      "name": "importGraph",
+      "scope": "leanprover-community",
+      "inherited": true,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe/.lake/packages/importGraph",
+      "configFile": "lakefile.toml",
+      "manifestFile": "lake-manifest.json"
+    },
+    {
+      "type": "path",
+      "name": "proofwidgets",
+      "scope": "leanprover-community",
+      "inherited": true,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe/.lake/packages/proofwidgets",
+      "configFile": "lakefile.lean",
+      "manifestFile": "lake-manifest.json"
+    },
+    {
+      "type": "path",
+      "name": "aesop",
+      "scope": "leanprover-community",
+      "inherited": true,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe/.lake/packages/aesop",
+      "configFile": "lakefile.toml",
+      "manifestFile": "lake-manifest.json"
+    },
+    {
+      "type": "path",
+      "name": "Qq",
+      "scope": "leanprover-community",
+      "inherited": true,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe/.lake/packages/Qq",
+      "configFile": "lakefile.toml",
+      "manifestFile": "lake-manifest.json"
+    },
+    {
+      "type": "path",
+      "name": "batteries",
+      "scope": "leanprover-community",
+      "inherited": true,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe/.lake/packages/batteries",
+      "configFile": "lakefile.toml",
+      "manifestFile": "lake-manifest.json"
+    },
+    {
+      "type": "path",
+      "name": "Cli",
+      "scope": "leanprover",
+      "inherited": true,
+      "dir": "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe/.lake/packages/Cli",
+      "configFile": "lakefile.toml",
+      "manifestFile": "lake-manifest.json"
+    }
+  ],
+  "name": "M5MathlibProbe",
+  "lakeDir": ".lake"
+}

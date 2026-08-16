@@ -1,0 +1,11 @@
+mathlib_version = "4.32.1"
+mathlib_tag = "v4.32.1"
+mathlib_commit = "520045ab14e26149ee970e2e617ca04b09bde5d6"
+lean_version = "4.32.1"
+lean_toolchain = "leanprover/lean4:v4.32.1"
+lean_toolchain_id = "lean-4.32.1-android1"
+host_toolchain_archive = "lean-4.32.1-linux.tar.zst"
+host_toolchain_sha256 = "57d5c062a6b4bae6fba511a1704aa124dff461c37d0fc94585637fbb7d951b50"
+producer_cmake_version = "3.31.10"
+producer_cmake_sha256 = "3cb3dd247b6a1de2d0f4b20c6fd4326c9024e894cebc9dc8699758887e566ca7"
+pack_revision = 1

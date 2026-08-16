@@ -1,0 +1,11 @@
+name = "M5MathlibProbe"
+version = "0.1.0"
+defaultTargets = ["M5MathlibProbe"]
+
+[[require]]
+name = "mathlib"
+path = "../../../no_backup/mathlib-packs/mathlib-4.32.1-complete-probe"
+
+[[lean_lib]]
+name = "M5MathlibProbe"
+roots = ["Main"]

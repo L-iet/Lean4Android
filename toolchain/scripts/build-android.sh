@@ -2,9 +2,9 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-require_command cmake
+require_command "$CMAKE_COMMAND"
 require_patched_lean_checkout
-require_file "$HOST_BUILD/stage0/bin/lean"
+require_file "$HOST_PRODUCER/bin/lean"
 require_file "$ANDROID_DEPS/lib/pkgconfig/libuv.pc"
 require_file "$ANDROID_DEPS/lib/libssl.a"
 require_file "$NDK_ROOT/build/cmake/android.toolchain.cmake"
@@ -12,7 +12,8 @@ require_file "$NDK_ROOT/build/cmake/android.toolchain.cmake"
 export PKG_CONFIG_LIBDIR="$ANDROID_DEPS/lib/pkgconfig"
 export PKG_CONFIG_SYSROOT_DIR=/
 
-cmake -S "$LEAN_SOURCE/src" -B "$ANDROID_BUILD" -G "Unix Makefiles" \
+run_with_progress "configure Android Lean build $ANDROID_BUILD_VARIANT" \
+  "$CMAKE_COMMAND" -S "$LEAN_SOURCE/src" -B "$ANDROID_BUILD" -G "Unix Makefiles" \
   -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM="android-$MINIMUM_API" \
@@ -26,7 +27,7 @@ cmake -S "$LEAN_SOURCE/src" -B "$ANDROID_BUILD" -G "Unix Makefiles" \
   -DOPENSSL_SSL_LIBRARY="$ANDROID_DEPS/lib/libssl.a" \
   -DOPENSSL_USE_STATIC_LIBS=TRUE \
   -DSTAGE=1 \
-  -DPREV_STAGE="$HOST_BUILD/stage0" \
+  -DPREV_STAGE="$HOST_PRODUCER" \
   -DPREV_STAGE_CMAKE_EXECUTABLE_SUFFIX= \
   -DLEAN_PLATFORM_TARGET=aarch64-linux-android \
   -DLEAN_CXX_STDLIB="-Wl,-Bstatic -lc++ -Wl,-Bdynamic" \
@@ -36,4 +37,5 @@ cmake -S "$LEAN_SOURCE/src" -B "$ANDROID_BUILD" -G "Unix Makefiles" \
   -DLLVM=OFF \
   -DINSTALL_CADICAL=OFF \
   -DINSTALL_LEANTAR=OFF
-cmake --build "$ANDROID_BUILD" --parallel "$JOBS"
+run_with_progress "build Android Lean $ANDROID_BUILD_VARIANT with $JOBS jobs" \
+  "$CMAKE_COMMAND" --build "$ANDROID_BUILD" --parallel "$JOBS"

@@ -15,6 +15,9 @@ import threading
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from script_progress import configure_logging
+
 
 PACKAGE = "org.lean4android.app"
 APP_ROOT = f"/data/user/0/{PACKAGE}"
@@ -130,16 +133,19 @@ def lean_lake_memory_kib(adb_path: Path) -> tuple[int, int]:
 
 
 def main() -> int:
+    configure_logging()
     parser = argparse.ArgumentParser()
     parser.add_argument("--adb", type=Path, default=Path(".android-sdk/platform-tools/adb"))
     parser.add_argument("--force-after-initialize", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
+    print("Progress device LSP conformance: 0% (checking device)")
     device = adb(args.adb, "get-state").stdout.decode().strip()
     if device != "device":
         raise RuntimeError(f"ADB device is not ready: {device!r}")
 
+    print("Progress device LSP conformance: 10% (installing fixture)")
     write_private_file(args.adb, f"{PROJECT}/lakefile.toml", """name = "lsp_conformance"\nversion = "0.1.0"\n""")
     write_private_file(args.adb, f"{PROJECT}/lean-toolchain", "leanprover/lean4:v4.32.1\n")
     source = "theorem broken : 1 + 1 = 3 := by\n  rfl\n"
@@ -165,6 +171,7 @@ def main() -> int:
         "LAKE_OVERRIDE_LEAN": "true",
     }
     launch_started = time.monotonic()
+    print("Progress device LSP conformance: 25% (launching server)")
     process = subprocess.Popen(
         [
             str(args.adb),
@@ -208,6 +215,7 @@ def main() -> int:
     root_uri = "file://" + PROJECT
     document_uri = root_uri + "/Main.lean"
     try:
+        print("Progress device LSP conformance: 40% (initializing server)")
         process.stdin.write(frame({
             "jsonrpc": "2.0",
             "id": 1,
@@ -238,6 +246,7 @@ def main() -> int:
         process.stdin.write(frame({"jsonrpc": "2.0", "id": registration["id"], "result": None}))
         process.stdin.flush()
         if args.force_after_initialize:
+            print("Progress device LSP conformance: 80% (forcing transport stop and checking cleanup)")
             process.terminate()
             process.wait(timeout=5.0)
             time.sleep(1.0)
@@ -254,6 +263,7 @@ def main() -> int:
             if remaining.stdout.strip():
                 raise AssertionError(f"orphaned Lean/Lake processes: {remaining.stdout.decode().strip()}")
             stop_sampling()
+            print("Progress device LSP conformance: 100% (complete)")
             print(json.dumps({
                 "initialize": "ok",
                 "initializeMs": initialize_ms,
@@ -263,6 +273,7 @@ def main() -> int:
                 "orphanProcesses": 0,
             }, indent=2))
             return 0
+        print("Progress device LSP conformance: 65% (opening document)")
         did_open_started = time.monotonic()
         process.stdin.write(frame({
             "jsonrpc": "2.0",
@@ -287,6 +298,7 @@ def main() -> int:
         launch_to_diagnostic_ms = round((time.monotonic() - launch_started) * 1000)
         stop_sampling()
 
+        print("Progress device LSP conformance: 85% (graceful shutdown)")
         process.stdin.write(frame({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": None}))
         process.stdin.flush()
         shutdown = wait_for(
@@ -304,6 +316,7 @@ def main() -> int:
         exit_code = process.wait(timeout=15.0)
         if exit_code != 0:
             raise AssertionError(f"server exited {exit_code}")
+        print("Progress device LSP conformance: 100% (complete)")
         print(json.dumps({
             "initialize": "ok",
             "initializeMs": initialize_ms,

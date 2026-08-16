@@ -8,9 +8,9 @@ mkdir -p "$WORK_DIR/src"
 fetch_checkout() {
   local url="$1" revision="$2" destination="$3"
   if [[ ! -d "$destination/.git" ]]; then
-    git clone --filter=blob:none --no-checkout "$url" "$destination"
+    run_with_progress "clone $url" git clone --filter=blob:none --no-checkout "$url" "$destination"
   fi
-  git -C "$destination" fetch --depth 1 origin "$revision"
+  run_with_progress "fetch $revision into $destination" git -C "$destination" fetch --depth 1 origin "$revision"
   git -C "$destination" checkout --detach --force FETCH_HEAD
   git -C "$destination" reset --hard FETCH_HEAD
   git -C "$destination" clean -ffd

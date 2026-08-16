@@ -474,6 +474,8 @@ jq empty toolchain/output/lean-4.32.1-android1/manifest.json
 GRADLE_USER_HOME="$PWD/.gradle-user-home" ./gradlew testDebugUnitTest
 ```
 
+For any long build, copy, packaging, or verification command, set `LEAN4ANDROID_LOG_FILE` to a durable path outside an output directory that the command recreates. Checked-in shell and Python producer scripts tee combined output there, emit 30-second heartbeats, and report percentages when bytes/items provide a defensible denominator. `LEAN4ANDROID_PROGRESS_INTERVAL_SECONDS` changes the interval. Gradle invocations should continue using `--console=plain` and may be wrapped with shell `set -o pipefail; ... 2>&1 | tee LOG` when they are called directly rather than through a checked-in script.
+
 Also verify the source patch invariant and inspect `git status`.
 
 ### 8.2 Physical-device sequence
