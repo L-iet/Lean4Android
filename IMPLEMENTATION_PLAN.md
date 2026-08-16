@@ -424,6 +424,26 @@ Execution plan: [`docs/delivery/M5_MATHLIB_INTEGRATION_PLAN.md`](docs/delivery/M
 
 Exit: representative Mathlib files work offline without process death, and the distribution method meets store and license requirements.
 
+### M5.0 — Near-term output and completion UX
+
+Implement these in the listed priority order after the focused M5 Mathlib compatibility/feasibility gate and before the broader M5.1 editor expansion.
+
+#### Priority 1 — Output presentation and automatic reveal
+
+- Add **Settings → Interface → Output presentation** with persistent **Docked** and **Popup** choices. **Docked** is the existing pane integrated into the workspace; **Popup** is an in-app output window layered over the workspace. This setting affects Output only and must not change the Messages or Goals panes.
+- In Docked mode, starting **Build project** or Run/Play automatically expands/reveals Output, including when the user previously collapsed it. Retain the established temporary Output suppression while a docked IME is visible, then reveal it when the layout can do so without obscuring typing.
+- In Popup mode, Output remains absent from the normal editor split and opens automatically only in response to Build project or Run/Play. Keep a direct way to dismiss and reopen the current bounded output without restarting the job; Back/Escape, cancellation, Activity recreation, and repeated runs must have deterministic behavior.
+- Preserve bounded chronological output, progress/error states, selection/copy, cancellation, pane-size memory for later Docked use, accessibility, compact/tablet layouts, and exact child-process cleanup in both modes. Do not implement this as a system overlay, WebView, or second Activity unless a later design review establishes a concrete need.
+
+#### Priority 2 — Automatic inline LSP completion
+
+- Stop presenting completion candidates as Goals-panel text. When completion is enabled, request candidates automatically from the retained LSP session as the user types, using bounded debounce, document version/generation checks, cancellation, and stale-response rejection.
+- Show candidates in a bounded, accessible popup anchored directly below or otherwise adjacent to the active caret, clamped to the visible editor/IME window. Let touch and keyboard users select a candidate, dismiss the popup, and insert the LSP-provided replacement/text edit through the normal editor history, recovery, and LSP-version path.
+- Add a persistent **Settings → Editor → Completions** enable/disable control. Disabling it cancels pending automatic requests and dismisses the popup while preserving explicit non-completion LSP features.
+- Define prefix replacement, LSP `textEdit`/insert-text handling, selection/caret placement, undo grouping, IME composition, rapid typing, file/project switches, server restart, empty/error results, and Activity recreation before acceptance. Do not silently execute arbitrary snippets or commands returned as completion metadata.
+
+Exit: Build and Run always reveal Output according to the selected Docked/Popup mode without affecting Messages or Goals, and enabled LSP completions appear at the caret and can be inserted safely instead of being printed in Goals.
+
 ### M5.1 — General project files and program streams
 
 - Generalize project creation, import/export, tree, tabs, recovery, rename/delete, and text editing from Lean-only files to bounded project-contained text files. Start with a plain-text fallback and explicit encoding/size/error handling; binary files may remain visible/exportable but must not be decoded as text.
@@ -452,7 +472,7 @@ Exit: symbol-row visibility/content and both font-size settings are durable, bou
 
 ### M6 — Hardening and beta release (3–5 weeks)
 
-- Threat-model imported ZIPs/projects, WebView bridge, native processes, and package manifests.
+- Threat-model imported ZIPs/projects, any added UI dependency or popup/window boundary, native processes, and package manifests.
 - Run compatibility, soak, cancellation, corruption, and process-death tests; treat manufactured low-storage pressure as a stretch hardening case.
 - Add crash reporting with opt-in/privacy controls, onboarding, licenses, backup policy, and a support bundle exporter.
 - Publish known limitations and supported Lean/package versions.
@@ -463,6 +483,8 @@ Exit: signed beta passes the release test matrix with no critical data-loss, san
 ### M7 — Post-beta editor depth
 
 - Implement Lean-style backslash abbreviation completion from a pinned, reviewed abbreviation data source. Conversion occurs only on the configured delimiter (initially Space), uses deterministic prefix resolution, supports multi-character replacements and `$CURSOR` placement, and forms one coherent undo edit without breaking IME composition, selections, or LSP versions.
+- Investigate and then implement syntax-aware auto-indent only after defining Lean newline/dedent behavior, selection replacement, paste handling, undo grouping, IME composition, and LSP-version invariants. Begin with a measured prototype; do not ship indentation rules that unpredictably rewrite existing text.
+- Investigate code folding with a stable source-to-visible-text mapping, gutter affordances, cursor/selection behavior, diagnostics/navigation into folded ranges, edits spanning folds, recovery, accessibility, and large-file performance. Prefer Lean syntax information when available; use indentation-based regions only if they are deterministic and validated against representative Lean code.
 - Add word wrap only after the native editor can keep wrapped visual rows, the line-number gutter, selection/cursor geometry, diagnostic navigation, scrolling, IME visibility, and large-file performance consistent.
 - Add syntax highlighters to the M5.1 registry according to demonstrated demand; opening/editing a file must never depend on a grammar being installed.
 
@@ -478,8 +500,9 @@ The device-confirmed visual editor is a continuous acceptance baseline, not a di
 - document-version and edit-offset conversion, especially UTF-16 LSP positions;
 - environment construction and command argument handling;
 - manifest/hash/signature validation;
-- project path validation and hostile ZIP fixtures; and
+- project path validation and hostile ZIP fixtures;
 - state restoration and migration logic;
+- output-presentation persistence/reveal rules and completion popup/request/edit state;
 - generic text/binary classification, encoding and size limits, and highlighter-registry fallback; and
 - URI-to-contained-project location resolution plus bounded reference-result normalization.
 
@@ -493,8 +516,9 @@ The device-confirmed visual editor is a continuous acceptance baseline, not a di
 - explicit EOF/interactive/project-file stdin modes, separate bounded stdout/stderr capture, stream export, and input-wait recreation;
 - LSP initialize/edit/diagnostics/shutdown transcripts;
 - cold install, upgrade, corrupted toolchain, and interrupted pack install;
-- app backgrounding, activity recreation, and app process death; optionally add manufactured low-storage pressure in the hardening lane; and
-- IME, Unicode, hardware keyboard, TalkBack, and large source files.
+- app backgrounding, activity recreation, and app process death; optionally add manufactured low-storage pressure in the hardening lane;
+- IME, Unicode, hardware keyboard, TalkBack, and large source files; and
+- Docked/Popup Output behavior plus caret-anchored completion positioning, insertion, dismissal, recreation, and stale-result rejection.
 
 ### Toolchain conformance suite
 
@@ -520,7 +544,7 @@ CI should build and unit-test every change, build the pinned toolchain from scra
 | Toolchain/Mathlib version mismatch | Invalid artifacts or confusing errors | Immutable version IDs and signed compatibility manifests |
 | Package size is too large | Store/install failure | Core delivery spike before UI expansion; separate data packs, AAB/asset delivery, measure compressed/installed/peak temporary sizes |
 | Arbitrary package build logic | Security and compatibility issues | Offline allowlisted packs first; no downloaded executable/native plugins |
-| Editor bridge compromises files | Project/data exposure | Bundled content only, narrow typed bridge, disabled navigation/file access |
+| An added UI dependency expands the attack or lifecycle surface | Project/data exposure, offline regressions, or inconsistent state | Prefer existing native Compose primitives; require a scoped design, dependency audit, typed ownership boundaries, and proportional device validation |
 | App update or crash loses work | User data loss | Atomic saves, recovery snapshots, migration rollback, import/export tests |
 | Android background limits kill builds | Interrupted operation | foreground service for user-visible long jobs; persistent job state and cancellation |
 | A blocked stdin read looks like a hung program | Confusing UI or orphaned child | Explicit run input mode and visible waiting/running state; send/EOF/cancel controls; never infer a prompt from arbitrary output |
@@ -545,11 +569,12 @@ These are valuable, but each expands the executable-code, package-management, UI
 ## 9. Immediate next actions
 
 1. Begin M5 with the version-matched offline Mathlib pack and measure capacity, recovery, latency, memory, and thermal behavior without regressing the completed M4.6 editor/pane/tree/lifecycle baselines.
-2. After the M5 feasibility gate, complete M5.1 general project files and explicit program-stream modes before navigation or preference expansion; this is the next storage/process architecture boundary.
-3. Complete M5.2 direct definition/reference navigation and M5.3 symbol/font preferences, then freeze features for M6 hardening and beta release. Keep Unicode abbreviation completion and word wrap in post-beta M7.
-4. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
-5. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
-6. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
+2. After the focused M5 Mathlib compatibility/feasibility gate, complete M5.0 in priority order: first Docked/Popup Output presentation with automatic Build/Run reveal, then enabled/disabled caret-anchored automatic LSP completion.
+3. Complete M5.1 general project files and explicit program-stream modes, then M5.2 direct definition/reference navigation and M5.3 symbol/font preferences before freezing features for M6 hardening and beta release.
+4. Keep auto-indent, code folding, Unicode abbreviation completion, and word wrap in post-beta M7 until their editing, source-mapping, IME, accessibility, and performance invariants are designed and measured.
+5. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+6. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
+7. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 
