@@ -227,13 +227,22 @@ Device tests proved that removing server/private/IR facets causes successive imp
 
 ### 5.3 Build and test the APK
 
-Use the project-local Gradle home and disable the build cache for the large asset build:
+Use the checked-in UI/Gradle runner. It uses the project-local Gradle home,
+disables the build cache for the large asset build, preserves Gradle's exit
+status, appends combined output to `toolchain/output/ui-gradle-build.log`, and
+emits a periodic elapsed-time heartbeat with the most recent Gradle output:
 
 ```shell
-GRADLE_USER_HOME="$PWD/.gradle-user-home" \
-  ./gradlew --no-build-cache --no-daemon --console=plain \
-  testDebugUnitTest :app:assembleDebug
+scripts/run-ui-gradle.sh
 ```
+
+Set `LEAN4ANDROID_UI_GRADLE_LOG` for a different durable log and
+`LEAN4ANDROID_PROGRESS_INTERVAL_SECONDS` for a different heartbeat interval.
+Pass explicit Gradle tasks for a focused check, for example
+`scripts/run-ui-gradle.sh :app:testDebugUnitTest :app:compileDebugKotlin`.
+Gradle's underlying `Sync` tasks do not expose per-file progress, so the
+heartbeat reports elapsed time and the last task/output rather than inventing
+a percentage.
 
 The APK is written to:
 
@@ -343,9 +352,7 @@ Always inspect `git status` before building. Existing unrelated changes belong t
 If no audited toolchain input changed:
 
 ```shell
-GRADLE_USER_HOME="$PWD/.gradle-user-home" \
-  ./gradlew --no-build-cache --no-daemon --console=plain \
-  testDebugUnitTest :app:assembleDebug
+scripts/run-ui-gradle.sh
 ```
 
 Then reinstall with `adb install --user 0 -r -t`. `-r` preserves app-private data. Test both cold launch and the affected UI/process path. If the installer or locator changed, also test a genuinely fresh data install and APK update migration; preserving old data alone is insufficient.
@@ -353,7 +360,7 @@ Then reinstall with `adb install --user 0 -r -t`. `-r` preserves app-private dat
 For a fast compile-only check, run the narrow module task first, but do not use it as final verification:
 
 ```shell
-GRADLE_USER_HOME="$PWD/.gradle-user-home" ./gradlew :app:compileDebugKotlin
+scripts/run-ui-gradle.sh :app:compileDebugKotlin
 ```
 
 ### 7.2 Unit-test-only or Kotlin library change

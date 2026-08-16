@@ -61,8 +61,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Switch
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -92,7 +90,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.runBlocking
@@ -109,6 +106,8 @@ import org.lean4android.process.ProcessJobSupervisor
 import org.lean4android.project.LeanProjectRepository
 import org.lean4android.toolchain.AndroidToolchainLocator
 import org.lean4android.toolchain.ToolchainCommandFactory
+import org.lean4android.app.ui.theme.Lean4AndroidTheme
+import org.lean4android.app.ui.theme.LeanTheme
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
@@ -234,7 +233,7 @@ class MainActivity : ComponentActivity() {
             var outputFraction by remember {
                 mutableStateOf(clampPaneFraction(getPreferences(MODE_PRIVATE).getFloat("outputFraction", 0.24f)))
             }
-            MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
+            Lean4AndroidTheme(darkTheme = darkTheme) {
                 LeanEditorScreen(
                     initialState = editorState,
                     onStateChanged = {
@@ -1901,17 +1900,17 @@ private fun EditorContent(
             }
         }
         val editorScroll = rememberScrollState()
-        val editorStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
-        Surface(Modifier.fillMaxWidth().weight(1f - outputFraction), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
+        val editorStyle = LeanTheme.components.editor
+        Surface(Modifier.fillMaxWidth().weight(1f - outputFraction), color = editorStyle.containerColor, shape = editorStyle.shape) {
             Row(Modifier.fillMaxSize().verticalScroll(editorScroll).padding(vertical = 12.dp)) {
                 Text(
                     editorLineNumbers(value.text),
                     modifier = Modifier
-                        .background(MaterialTheme.colorScheme.surface)
+                        .background(editorStyle.gutterColor)
                         .padding(horizontal = 10.dp)
                         .semantics { contentDescription = "Line numbers" },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = editorStyle,
+                    color = editorStyle.gutterContentColor,
+                    style = editorStyle.codeStyle,
                 )
                 var sourceModifier = Modifier
                     .weight(1f)
@@ -1937,9 +1936,9 @@ private fun EditorContent(
                     },
                     modifier = sourceModifier,
                     enabled = !running,
-                    textStyle = editorStyle.copy(color = MaterialTheme.colorScheme.onSurface),
+                    textStyle = editorStyle.codeStyle.copy(color = editorStyle.contentColor),
                     visualTransformation = LeanSyntaxVisualTransformation(searchQuery, diagnosticRanges),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(editorStyle.cursorColor),
                 )
             }
         }
@@ -1957,18 +1956,19 @@ private fun EditorContent(
             TextButton(onClick = onCancel) { Text("Cancel") }
         }
         if (activeDiagnostics.isNotEmpty()) {
+            val messagesStyle = if (messagesHaveError) LeanTheme.components.errorMessages else LeanTheme.components.messages
             Surface(
-                Modifier.fillMaxWidth().heightIn(max = 160.dp),
-                color = if (messagesHaveError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = if (messagesHaveError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                shape = MaterialTheme.shapes.small,
+                Modifier.fillMaxWidth().heightIn(max = LeanTheme.dimensions.messagesMaxHeight),
+                color = messagesStyle.containerColor,
+                contentColor = messagesStyle.contentColor,
+                shape = messagesStyle.shape,
             ) {
-                Column(Modifier.padding(horizontal = 8.dp, vertical = if (messagesCollapsed) 0.dp else 4.dp)) {
+                Column(Modifier.padding(if (messagesCollapsed) messagesStyle.collapsedContentPadding else messagesStyle.contentPadding)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Messages (${activeDiagnostics.size})", style = MaterialTheme.typography.titleSmall)
+                        Text("Messages (${activeDiagnostics.size})", style = messagesStyle.titleStyle)
                         TextButton(
                             onClick = { onMessagesCollapsedChanged(!messagesCollapsed) },
-                            modifier = Modifier.size(30.dp).semantics {
+                            modifier = Modifier.size(LeanTheme.dimensions.messagesCollapseButtonSize).semantics {
                                 contentDescription = if (messagesCollapsed) "Restore Messages panel" else "Collapse Messages panel"
                             },
                             contentPadding = PaddingValues(0.dp),
@@ -1976,7 +1976,7 @@ private fun EditorContent(
                     }
                     if (!messagesCollapsed) {
                         Column(Modifier.verticalScroll(rememberScrollState())) {
-                            activeDiagnostics.forEach { Text(it.message, style = MaterialTheme.typography.bodySmall) }
+                            activeDiagnostics.forEach { Text(it.message, style = messagesStyle.bodyStyle) }
                         }
                     }
                 }
@@ -2056,53 +2056,56 @@ private fun ProjectTree(
 @Composable
 private fun EditorSymbolRow(enabled: Boolean, onSymbol: (String) -> Unit) {
     val symbols = listOf("{", "}", "^", "→", "←", "↔", "∀", "∃", "λ", "∧", "∨", "¬", "≤", "≥", "≠", "⊢", "⟨", "⟩")
+    val style = LeanTheme.components.symbolRow
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).semantics { contentDescription = "Lean symbol keyboard row" },
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(style.spacing),
     ) {
         symbols.forEach { symbol ->
             TextButton(
                 enabled = enabled,
                 onClick = { onSymbol(symbol) },
-                modifier = Modifier.height(34.dp).widthIn(min = 36.dp).semantics { contentDescription = "Insert symbol $symbol" },
-                contentPadding = PaddingValues(horizontal = 7.dp, vertical = 0.dp),
-            ) { Text(symbol, fontFamily = FontFamily.Monospace) }
+                modifier = Modifier.height(LeanTheme.dimensions.symbolButtonHeight).widthIn(min = LeanTheme.dimensions.symbolButtonMinWidth).semantics { contentDescription = "Insert symbol $symbol" },
+                contentPadding = PaddingValues(horizontal = style.horizontalContentPadding, vertical = style.verticalContentPadding),
+            ) { Text(symbol, style = style.textStyle) }
         }
     }
 }
 
 @Composable
 private fun GoalsPanel(modifier: Modifier, activePath: String?, lspUiState: LspUiState) {
+    val style = LeanTheme.components.goals
     Surface(
         modifier = modifier.semantics { contentDescription = "Goals pane" },
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = MaterialTheme.shapes.small,
+        color = style.containerColor,
+        contentColor = style.contentColor,
+        shape = style.shape,
     ) {
-        Column(Modifier.fillMaxSize().padding(10.dp).verticalScroll(rememberScrollState())) {
-            Text("Goals", style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.fillMaxSize().padding(style.contentPadding).verticalScroll(rememberScrollState())) {
+            Text("Goals", style = style.titleStyle)
             Text("Lean server: ${lspUiState.status}", style = MaterialTheme.typography.labelSmall)
             val sections = activePath?.let { goalPaneSections(lspUiState.goals[it], lspUiState.termGoals[it]) }.orEmpty()
             if (sections.isEmpty()) {
                 Text(if (lspUiState.status == "Ready") "Move the cursor to inspect goals." else "Waiting for Lean server…")
             } else {
                 sections.forEach { (title, content) ->
-                    title?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
-                    Text(content, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                    title?.let { Text(it, style = style.titleStyle) }
+                    Text(content, style = style.bodyStyle)
                 }
             }
             if (lspUiState.hover.isNotBlank()) {
-                Text("Hover", style = MaterialTheme.typography.titleSmall)
+                Text("Hover", style = style.titleStyle)
                 HoverMarkdown(lspUiState.hover)
             }
             if (lspUiState.completions.isNotEmpty()) {
-                Text("Completions", style = MaterialTheme.typography.titleSmall)
+                Text("Completions", style = style.titleStyle)
                 Text(lspUiState.completions.joinToString("  "), style = MaterialTheme.typography.bodySmall)
             }
             if (lspUiState.navigationMessage.isNotBlank()) {
                 Text(lspUiState.navigationMessage, style = MaterialTheme.typography.bodySmall)
             }
             if (lspUiState.references.isNotEmpty()) {
-                Text("References", style = MaterialTheme.typography.titleSmall)
+                Text("References", style = style.titleStyle)
                 lspUiState.references.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         }
@@ -2139,8 +2142,9 @@ private fun PaneSplitter(
     onDrag: (Float) -> Unit,
     onStep: (Float) -> Unit,
 ) {
+    val style = LeanTheme.components.splitter
     val orientation = if (vertical) Orientation.Horizontal else Orientation.Vertical
-    val modifier = (if (vertical) Modifier.width(16.dp).fillMaxHeight() else Modifier.height(16.dp).fillMaxWidth())
+    val modifier = (if (vertical) Modifier.width(LeanTheme.dimensions.splitterThickness).fillMaxHeight() else Modifier.height(LeanTheme.dimensions.splitterThickness).fillMaxWidth())
         .draggable(rememberDraggableState(onDelta = onDrag), orientation, enabled = !collapsed)
         .onPreviewKeyEvent { event ->
             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -2165,7 +2169,7 @@ private fun PaneSplitter(
                 CustomAccessibilityAction("Make $paneName smaller") { if (!collapsed) onStep(-0.05f); true },
             )
         }
-        .background(MaterialTheme.colorScheme.outlineVariant)
+        .background(style.trackColor)
     androidx.compose.foundation.layout.Box(modifier, contentAlignment = Alignment.Center) {
         Text(
             when {
@@ -2175,11 +2179,11 @@ private fun PaneSplitter(
                 else -> "▼"
             },
             modifier = Modifier
-                .background(MaterialTheme.colorScheme.surface, CircleShape)
-                .padding(1.dp)
+                .background(style.handleColor, CircleShape)
+                .padding(style.handlePadding)
                 .clickable(onClick = onToggleCollapsed)
                 .semantics { contentDescription = if (collapsed) "Restore $paneName" else "Collapse $paneName" },
-            style = MaterialTheme.typography.labelSmall,
+            style = style.labelStyle,
         )
     }
 }
@@ -2193,16 +2197,17 @@ private fun FileTabStrip(
     onDelete: (String) -> Unit,
 ) {
     var menuPath by remember { mutableStateOf<String?>(null) }
+    val style = LeanTheme.components.tabs
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(style.spacing),
     ) {
         editor.tabs.forEach { tab ->
             val active = tab.path == editor.activePath
             androidx.compose.foundation.layout.Box {
                 Surface(
-                    color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.small,
+                    color = if (active) style.activeContainerColor else style.inactiveContainerColor,
+                    shape = style.shape,
                     modifier = Modifier
                     .combinedClickable(
                         enabled = enabled,
@@ -2214,7 +2219,7 @@ private fun FileTabStrip(
                         stateDescription = listOf(if (active) "Selected" else "Not selected", if (tab.dirty) "Unsaved changes" else "Saved").joinToString(", ")
                     },
                 ) {
-                    Text(tab.path.substringAfterLast('/') + if (tab.dirty) " •" else "", Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                    Text(tab.path.substringAfterLast('/') + if (tab.dirty) " •" else "", Modifier.padding(horizontal = style.horizontalPadding, vertical = style.verticalPadding))
                 }
                 DropdownMenu(expanded = menuPath == tab.path, onDismissRequest = { menuPath = null }) {
                     DropdownMenuItem(text = { Text("Rename") }, onClick = { menuPath = null; onRename(tab.path) })
@@ -2246,7 +2251,19 @@ private fun ProjectOpenRow(id: String, onOpen: () -> Unit, onRename: () -> Unit,
 internal fun editorLineNumbers(text: String): String = (1..(text.count { it == '\n' } + 1)).joinToString("\n")
 
 @Composable
-private fun OutputPanel(state: EditorRunState, modifier: Modifier = Modifier.heightIn(min = 100.dp, max = 200.dp)) {
+private fun OutputPanel(state: EditorRunState) {
+    OutputPanel(
+        state = state,
+        modifier = Modifier.heightIn(
+            min = LeanTheme.dimensions.outputMinHeight,
+            max = LeanTheme.dimensions.outputMaxHeight,
+        ),
+    )
+}
+
+@Composable
+private fun OutputPanel(state: EditorRunState, modifier: Modifier) {
+    val style = LeanTheme.components.output
     val output = when (state) {
         EditorRunState.Idle -> "Edit the source, then use Run or the Project drawer actions."
         EditorRunState.Running -> "Working…"
@@ -2259,16 +2276,17 @@ private fun OutputPanel(state: EditorRunState, modifier: Modifier = Modifier.hei
         modifier = modifier
             .fillMaxWidth()
             .semantics { liveRegion = LiveRegionMode.Polite },
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = MaterialTheme.shapes.medium,
+        color = style.containerColor,
+        contentColor = style.contentColor,
+        shape = style.shape,
     ) {
         SelectionContainer {
             Text(
                 text = output,
                 modifier = Modifier
-                    .padding(12.dp)
+                    .padding(style.contentPadding)
                     .verticalScroll(rememberScrollState()),
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                style = style.bodyStyle,
             )
         }
     }
