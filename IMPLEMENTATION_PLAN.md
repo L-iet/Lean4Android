@@ -446,6 +446,8 @@ Exit: Build and Run always reveal Output according to the selected Docked/Popup 
 
 ### M5.1 — General project files and program streams
 
+The detailed process, buffering, lifecycle, UI, security, and validation design is recorded in [`docs/project/STDIN_SUPPORT.md`](docs/project/STDIN_SUPPORT.md).
+
 - Generalize project creation, import/export, tree, tabs, recovery, rename/delete, and text editing from Lean-only files to bounded project-contained text files. Start with a plain-text fallback and explicit encoding/size/error handling; binary files may remain visible/exportable but must not be decoded as text.
 - Introduce a highlighter registry selected by file extension or detected content type, with plain text as the mandatory fallback. Keep Lean highlighting as the first registered language; additional language grammars are follow-up work rather than a prerequisite for opening a file.
 - Run supported Lean programs with the app-managed project root as their deterministic working directory so project-relative reads can address files visible in the tree. Preserve typed commands, a minimal deterministic environment, traversal-safe app operations, and the rule that this is not a shell or a per-project OS sandbox.
