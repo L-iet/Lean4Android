@@ -19,10 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from script_progress import configure_logging
 
 
-PACKAGE = "org.lean4android.app"
-APP_ROOT = f"/data/user/0/{PACKAGE}"
-SYSROOT = f"{APP_ROOT}/no_backup/toolchains/lean-4.32.1-android1"
-PROJECT = f"{APP_ROOT}/files/projects/lsp-conformance"
+DEFAULT_PACKAGE = "org.lean4android.app"
+DEFAULT_TOOLCHAIN_ID = "lean-4.32.1-android1"
 
 
 def adb(
@@ -40,15 +38,15 @@ def adb(
     )
 
 
-def write_private_file(adb_path: Path, destination: str, contents: str) -> None:
+def write_private_file(adb_path: Path, package: str, destination: str, contents: str) -> None:
     parent = destination.rsplit("/", 1)[0]
     temporary = "/data/local/tmp/lean4android-lsp-fixture"
     with tempfile.NamedTemporaryFile() as local:
         local.write(contents.encode())
         local.flush()
         adb(adb_path, "push", local.name, temporary)
-        adb(adb_path, "shell", "run-as", PACKAGE, "mkdir", "-p", parent)
-        adb(adb_path, "shell", "run-as", PACKAGE, "cp", temporary, destination)
+        adb(adb_path, "shell", "run-as", package, "mkdir", "-p", parent)
+        adb(adb_path, "shell", "run-as", package, "cp", temporary, destination)
         adb(adb_path, "shell", "rm", "-f", temporary)
 
 
@@ -111,16 +109,41 @@ def wait_for(
             raise TimeoutError(f"timed out waiting for {description}")
 
 
-def lean_lake_memory_kib(adb_path: Path) -> tuple[int, int]:
-    result = adb(adb_path, "shell", "ps", "-A", "-o", "PID,RSS,NAME", check=False)
-    rss_total = 0
-    pss_total = 0
+def package_uid(adb_path: Path, package: str) -> int:
+    result = adb(adb_path, "shell", "pm", "list", "packages", "--user", "0", "-U", package)
+    match = re.search(rb"\buid:(\d+)\b", result.stdout)
+    if not match:
+        raise RuntimeError(f"cannot resolve owner-user UID for {package}")
+    return int(match.group(1))
+
+
+def lean_lake_pids(adb_path: Path, uid: int) -> list[str]:
+    result = adb(adb_path, "shell", "ps", "-A", "-o", "UID,PID,NAME", check=False)
+    pids = []
     for line in result.stdout.decode(errors="replace").splitlines()[1:]:
         fields = line.split(None, 2)
         if len(fields) != 3:
             continue
-        pid, rss, name = fields
-        if name.rsplit("/", 1)[-1] in {"lean", "lake", "liblean_exe.so", "liblake_exe.so"}:
+        observed_uid, pid, name = fields
+        if observed_uid == str(uid) and name.rsplit("/", 1)[-1] in {
+            "lean", "lake", "liblean_exe.so", "liblake_exe.so",
+        }:
+            pids.append(pid)
+    return pids
+
+
+def lean_lake_memory_kib(adb_path: Path, uid: int) -> tuple[int, int]:
+    result = adb(adb_path, "shell", "ps", "-A", "-o", "UID,PID,RSS,NAME", check=False)
+    rss_total = 0
+    pss_total = 0
+    for line in result.stdout.decode(errors="replace").splitlines()[1:]:
+        fields = line.split(None, 3)
+        if len(fields) != 4:
+            continue
+        observed_uid, pid, rss, name = fields
+        if observed_uid == str(uid) and name.rsplit("/", 1)[-1] in {
+            "lean", "lake", "liblean_exe.so", "liblake_exe.so",
+        }:
             try:
                 rss_total += int(rss)
             except ValueError:
@@ -136,9 +159,20 @@ def main() -> int:
     configure_logging()
     parser = argparse.ArgumentParser()
     parser.add_argument("--adb", type=Path, default=Path(".android-sdk/platform-tools/adb"))
+    parser.add_argument("--package", default=DEFAULT_PACKAGE)
+    parser.add_argument("--toolchain-id", default=DEFAULT_TOOLCHAIN_ID)
     parser.add_argument("--force-after-initialize", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", args.package):
+        raise ValueError(f"invalid package: {args.package!r}")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", args.toolchain_id):
+        raise ValueError(f"invalid toolchain ID: {args.toolchain_id!r}")
+    package = args.package
+    uid = package_uid(args.adb, package)
+    app_root = f"/data/user/0/{package}"
+    sysroot = f"{app_root}/no_backup/toolchains/{args.toolchain_id}"
+    project = f"{app_root}/files/projects/lsp-conformance"
 
     print("Progress device LSP conformance: 0% (checking device)")
     device = adb(args.adb, "get-state").stdout.decode().strip()
@@ -146,28 +180,28 @@ def main() -> int:
         raise RuntimeError(f"ADB device is not ready: {device!r}")
 
     print("Progress device LSP conformance: 10% (installing fixture)")
-    write_private_file(args.adb, f"{PROJECT}/lakefile.toml", """name = "lsp_conformance"\nversion = "0.1.0"\n""")
-    write_private_file(args.adb, f"{PROJECT}/lean-toolchain", "leanprover/lean4:v4.32.1\n")
+    write_private_file(args.adb, package, f"{project}/lakefile.toml", """name = "lsp_conformance"\nversion = "0.1.0"\n""")
+    write_private_file(args.adb, package, f"{project}/lean-toolchain", "leanprover/lean4:v4.32.1\n")
     source = "theorem broken : 1 + 1 = 3 := by\n  rfl\n"
-    write_private_file(args.adb, f"{PROJECT}/Main.lean", source)
+    write_private_file(args.adb, package, f"{project}/Main.lean", source)
 
     lean_target = adb(
         args.adb,
         "shell",
         "run-as",
-        PACKAGE,
+        package,
         "readlink",
-        f"{SYSROOT}/bin/lean",
+        f"{sysroot}/bin/lean",
     ).stdout.decode().strip()
     native_directory = lean_target.rsplit("/", 1)[0]
     environment = {
-        "HOME": f"{APP_ROOT}/files",
-        "TMPDIR": f"{APP_ROOT}/cache",
-        "LEAN_SYSROOT": SYSROOT,
-        "TZ": f":{SYSROOT}/share/lean4android/UTC",
+        "HOME": f"{app_root}/files",
+        "TMPDIR": f"{app_root}/cache",
+        "LEAN_SYSROOT": sysroot,
+        "TZ": f":{sysroot}/share/lean4android/UTC",
         "LD_LIBRARY_PATH": native_directory,
         "PATH": "/system/bin",
-        "LAKE_HOME": SYSROOT,
+        "LAKE_HOME": sysroot,
         "LAKE_OVERRIDE_LEAN": "true",
     }
     launch_started = time.monotonic()
@@ -178,12 +212,12 @@ def main() -> int:
             "shell",
             "-T",
             "run-as",
-            PACKAGE,
+            package,
             "/system/bin/env",
             *(f"{key}={value}" for key, value in environment.items()),
-            f"{SYSROOT}/.lake/build/bin/lake",
+            f"{sysroot}/.lake/build/bin/lake",
             "-d",
-            PROJECT,
+            project,
             "serve",
         ],
         stdin=subprocess.PIPE,
@@ -200,7 +234,7 @@ def main() -> int:
 
     def sample_memory() -> None:
         while not sampling.is_set():
-            rss_kib, pss_kib = lean_lake_memory_kib(args.adb)
+            rss_kib, pss_kib = lean_lake_memory_kib(args.adb, uid)
             peak_rss_kib[0] = max(peak_rss_kib[0], rss_kib)
             peak_pss_kib[0] = max(peak_pss_kib[0], pss_kib)
             sampling.wait(0.1)
@@ -212,7 +246,7 @@ def main() -> int:
         sampling.set()
         rss_thread.join(timeout=2.0)
 
-    root_uri = "file://" + PROJECT
+    root_uri = "file://" + project
     document_uri = root_uri + "/Main.lean"
     try:
         print("Progress device LSP conformance: 40% (initializing server)")
@@ -250,18 +284,9 @@ def main() -> int:
             process.terminate()
             process.wait(timeout=5.0)
             time.sleep(1.0)
-            remaining = adb(
-                args.adb,
-                "shell",
-                "pidof",
-                "lean",
-                "lake",
-                "liblean_exe.so",
-                "liblake_exe.so",
-                check=False,
-            )
-            if remaining.stdout.strip():
-                raise AssertionError(f"orphaned Lean/Lake processes: {remaining.stdout.decode().strip()}")
+            remaining = lean_lake_pids(args.adb, uid)
+            if remaining:
+                raise AssertionError(f"orphaned Lean/Lake processes for UID {uid}: {' '.join(remaining)}")
             stop_sampling()
             print("Progress device LSP conformance: 100% (complete)")
             print(json.dumps({
@@ -316,6 +341,10 @@ def main() -> int:
         exit_code = process.wait(timeout=15.0)
         if exit_code != 0:
             raise AssertionError(f"server exited {exit_code}")
+        time.sleep(1.0)
+        remaining = lean_lake_pids(args.adb, uid)
+        if remaining:
+            raise AssertionError(f"orphaned Lean/Lake processes for UID {uid}: {' '.join(remaining)}")
         print("Progress device LSP conformance: 100% (complete)")
         print(json.dumps({
             "initialize": "ok",

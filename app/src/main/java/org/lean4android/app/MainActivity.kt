@@ -134,7 +134,6 @@ private const val MAIN_SOURCE = """import VisualProbe.Basic
 
 // Underscore keeps the generated Lean module name VisualProbe while avoiding the legacy M1 directory.
 private const val EDITOR_PROJECT_ID = "visual_probe"
-private const val EDITOR_TOOLCHAIN_ID = "lean-4.32.1-android1"
 
 class MainActivity : ComponentActivity() {
     private lateinit var editorStore: EditorSessionStore
@@ -330,7 +329,7 @@ class MainActivity : ComponentActivity() {
 
     private fun editorRepository() = LeanProjectRepository(
         filesDir.resolve("projects"),
-        EDITOR_TOOLCHAIN_ID,
+        BuildConfig.TOOLCHAIN_ID,
     )
 
     private fun ensureLspSession() {

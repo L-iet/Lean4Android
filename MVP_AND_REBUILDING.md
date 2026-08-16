@@ -28,6 +28,8 @@ The current pins are authoritative:
 
 Change pins only as a deliberate toolchain revision. Update `toolchain/versions.toml`, the patch, manifests, documentation, and conformance expectations together.
 
+For the focused accepted-APK recovery procedure and the Android1/M4.6 milestone boundary, see [ANDROID1_REBUILD.md](ANDROID1_REBUILD.md).
+
 ## 2. Repository and generated trees
 
 Tracked inputs:

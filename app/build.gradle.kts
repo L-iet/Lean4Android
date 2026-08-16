@@ -4,10 +4,15 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-val toolchainDistribution = rootProject.layout.projectDirectory.dir(
-    "toolchain/output/lean-4.32.1-android1",
-)
-val generatedToolchain = layout.buildDirectory.dir("generated/toolchain")
+val selectedToolchainId = providers.gradleProperty("leanToolchainId").orElse("lean-4.32.1-android1")
+val isolatedToolchainCandidate = providers.gradleProperty("isolatedToolchainCandidate")
+    .map(String::toBooleanStrict)
+    .orElse(false)
+val selectedToolchainIdValue = selectedToolchainId.get().also {
+    require(it.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}"))) { "Invalid leanToolchainId: $it" }
+}
+val toolchainDistribution = rootProject.layout.projectDirectory.dir("toolchain/output/$selectedToolchainIdValue")
+val generatedToolchain = layout.buildDirectory.dir("generated/toolchain/$selectedToolchainIdValue")
 val playAssetDelivery = providers.gradleProperty("playAssetDelivery").map(String::toBoolean).orElse(false)
 
 val stageToolchainNative by tasks.registering(Sync::class) {
@@ -58,6 +63,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0-dev"
+        buildConfigField("String", "TOOLCHAIN_ID", "\"$selectedToolchainIdValue\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
@@ -68,6 +74,16 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    buildTypes.named("debug") {
+        if (isolatedToolchainCandidate.get()) {
+            require(selectedToolchainIdValue != "lean-4.32.1-android1") {
+                "isolatedToolchainCandidate requires a non-default leanToolchainId"
+            }
+            applicationIdSuffix = ".android2candidate"
+            versionNameSuffix = "-android2candidate"
+        }
     }
 
     compileOptions {
