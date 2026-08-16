@@ -4,6 +4,8 @@ Lean4Android currently uses a native Jetpack Compose UI. The main screen is a mo
 
 The current production UI baseline is complete through M4.6. It includes multiple file tabs, a line-numbered Lean editor, search, syntax and diagnostic decoration, a Lean/Unicode symbol row, live LSP diagnostics and goals, collapsible/resizable panes, light/dark appearance settings, project navigation, and protected file/project lifecycle actions.
 
+The planned separation of these composables from their visual tokens and component styles is specified in [`UI_STYLE_ARCHITECTURE.md`](UI_STYLE_ARCHITECTURE.md). That design preserves this behavioral structure while moving theme, color, typography, dimension, spacing, shape, and component visual contracts into a Compose-native Kotlin design system.
+
 ## Main screen structure
 
 The visible editor screen is assembled by `LeanEditorScreen` in [`app/src/main/java/org/lean4android/app/MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt). That composable owns transient UI state such as the open menus, drawer, search field, text-field selections, undo histories, run state, and collapsed-panel state. It also connects the visible controls to the activity's project, process, persistence, and LSP callbacks.

@@ -432,6 +432,18 @@ While a targeted or full Mathlib build runs, continue the foreground product lan
 
 Before starting or resuming a producer, run `mathlib/scripts/status-android2-build.sh`. Use the exact targeted/full recipes in the Mathlib integration plan and rebuilding guide. Prefer two producer jobs when foreground Gradle/emulator work needs capacity and up to four when the producer owns the machine; never start a second producer to change job count. Do not run broad cleanup, dependency updates, official cache substitution, or concurrent commands against the producer checkout.
 
+### M5 foreground prerequisite — UI style and theme architecture
+
+Decision and migration plan: [`docs/editor/UI_STYLE_ARCHITECTURE.md`](docs/editor/UI_STYLE_ARCHITECTURE.md).
+
+- Separate visual decisions from screen/activity behavior before adding the next UI features. Move the root Material theme, semantic colors, typography, shapes, elevations, dimensions, spacing, and meaningful component style contracts into a Compose-native Kotlin design-system package.
+- Use layered Material 3 foundations, typed semantic design tokens, `CompositionLocal` theme access, and immutable component style objects. Keep adaptive/window/IME policy, pane fractions, state, callbacks, accessibility semantics, and content in explicit UI logic.
+- Extract meaningful reusable UI components from `MainActivity.kt` incrementally. Account for applicable width/height bounds, spacing, container/content/text colors, text roles, shapes, elevation, tint, and visual variants at each component boundary without creating a style class for every structural `Row` or `Column`.
+- Preserve caller-owned `Modifier` behavior and modifier ordering. Use modifier presets only for narrow repeated decoration; do not introduce class strings, a CSS cascade, an external stylesheet/config parser, arbitrary user-controlled layout, or a new UI dependency.
+- Preserve the accepted M4.6 light/dark, adaptive layout, IME, accessibility, editor, pane, and lifecycle baselines. Build future M5.0 popup Output/completion and M5.3 font preferences on the same semantic style system.
+
+Exit: visual tokens and meaningful component styles are discoverable outside screen logic; adaptive behavior remains typed and tested; the current UI is physically equivalent across supported layouts; and subsequent UI work has one safe extension mechanism.
+
 ### M5 corrective — Dynamic Lake module coverage
 
 Implement this in the foreground product lane without waiting for the targeted `Mathlib.Data.Nat.Prime.Basic` producer. Complete its own host and Android validation before starting broader/full Mathlib production. This repairs the current generated-project configuration, whose hardcoded `roots = ["Main", "<Project>.Basic"]` recognizes the scaffolded `Basic.lean` module but not subsequently created sibling or top-level modules.
@@ -594,14 +606,15 @@ These are valuable, but each expands the executable-code, package-management, UI
 ## 9. Immediate next actions
 
 1. Treat Mathlib artifact production as a resumable parallel lane: inspect it with `mathlib/scripts/status-android2-build.sh`, resume the targeted `Mathlib.Data.Nat.Prime.Basic` command when machine capacity permits, and never run concurrent producers. At a successful target checkpoint, audit facets/header and complete the basic Android2 import test.
-2. In the foreground lane, implement and validate the M5 dynamic Lake module-coverage corrective now: inner-directory globbing, explicit top-level module reconciliation, supported-project migration, and the `<LeanProjectName>/New.lean` default path. It no longer waits for the slow targeted build, but must finish before broader/full Mathlib production.
-3. After both the targeted Android import gate and module corrective pass, start/resume the full version-matched Mathlib producer in parallel with independent product work. Measure capacity, recovery, latency, memory, and thermal behavior at explicit pack checkpoints without regressing the completed M2–M4 editor/project/LSP/lifecycle baselines.
-4. After the focused M5 Mathlib compatibility/feasibility gate, complete M5.0 in priority order: first Docked/Popup Output presentation with automatic Build/Run reveal, then enabled/disabled caret-anchored automatic LSP completion.
-5. Complete M5.1 general project files and explicit program-stream modes, then M5.2 direct definition/reference navigation and M5.3 symbol/font preferences before freezing features for M6 hardening and beta release.
-6. Keep auto-indent, code folding, Unicode abbreviation completion, and word wrap in post-beta M7 until their editing, source-mapping, IME, accessibility, and performance invariants are designed and measured.
-7. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
-8. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
-9. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
+2. Implement the UI style/theme architecture prerequisite from `docs/editor/UI_STYLE_ARCHITECTURE.md` before further UI feature work, using a staged Compose-native token/component migration that preserves M4.6 behavior.
+3. In the foreground lane, implement and validate the M5 dynamic Lake module-coverage corrective: inner-directory globbing, explicit top-level module reconciliation, supported-project migration, and the `<LeanProjectName>/New.lean` default path. It no longer waits for the slow targeted build, but must finish before broader/full Mathlib production.
+4. After both the targeted Android import gate and module corrective pass, start/resume the full version-matched Mathlib producer in parallel with independent product work. Measure capacity, recovery, latency, memory, and thermal behavior at explicit pack checkpoints without regressing the completed M2–M4 editor/project/LSP/lifecycle baselines.
+5. After the focused M5 Mathlib compatibility/feasibility gate, complete M5.0 in priority order: first Docked/Popup Output presentation with automatic Build/Run reveal, then enabled/disabled caret-anchored automatic LSP completion.
+6. Complete M5.1 general project files and explicit program-stream modes, then M5.2 direct definition/reference navigation and M5.3 symbol/font preferences before freezing features for M6 hardening and beta release.
+7. Keep auto-indent, code folding, Unicode abbreviation completion, and word wrap in post-beta M7 until their editing, source-mapping, IME, accessibility, and performance invariants are designed and measured.
+8. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+9. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
+10. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 
