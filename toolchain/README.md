@@ -59,4 +59,36 @@ LEAN4ANDROID_TOOLCHAIN_ID=lean-4.32.1-android2 \
 
 These overrides do not change the checked-in active toolchain identity, app constants, `work/build/android-arm64`, or `output/lean-4.32.1-android1`. Promotion to `android2` is a separate reviewed step after manifest, ELF, APK, migration, offline, and physical-device conformance.
 
+## Resumable Android2 Mathlib producer
+
+Mathlib artifact production uses its own ignored pinned checkout and may run alongside independent Gradle, UI, documentation, or emulator work. It has one-writer semantics: never launch two producers or mutate `toolchain/work/mathlib-android2-producer` from another command. Check the real state first:
+
+```shell
+mathlib/scripts/status-android2-build.sh
+```
+
+A free lock plus a stale `running` record means the process died. Resume the targeted compatibility gate in a dedicated terminal/session with:
+
+```shell
+LEAN4ANDROID_JOBS=4 \
+LEAN4ANDROID_PROGRESS_INTERVAL_SECONDS=30 \
+LEAN4ANDROID_MATHLIB_TARGET=Mathlib.Data.Nat.Prime.Basic \
+LEAN4ANDROID_LOG_FILE="$PWD/toolchain/output/mathlib-android2-basic-build.log" \
+  mathlib/scripts/build-android2-artifacts.sh
+```
+
+Rerunning is the supported recovery operation. The wrapper acquires `flock`, verifies pins and producer identities, audits finalized facets, removes only proven temporary/damaged module families, then invokes local Lake with `--rehash --no-cache`. It preserves healthy outputs. Use `LEAN4ANDROID_JOBS=2` instead of 4 when foreground Gradle/emulator work needs CPU or memory; job count applies to the next invocation and is not a reason to interrupt a healthy producer.
+
+After the targeted build's artifact/header and Android import gate passes, and after the dynamic Lake module corrective is complete, start or resume the full build with a distinct durable log:
+
+```shell
+LEAN4ANDROID_JOBS=4 \
+LEAN4ANDROID_PROGRESS_INTERVAL_SECONDS=30 \
+LEAN4ANDROID_MATHLIB_TARGET=Mathlib \
+LEAN4ANDROID_LOG_FILE="$PWD/toolchain/output/mathlib-android2-full-build.log" \
+  mathlib/scripts/build-android2-artifacts.sh
+```
+
+Monitor with the status helper or `tail -f` on the selected log. Do not use `lake update`, the official binary cache, a clean build, or a second checkout pointed at the same build roots. Mathlib checkpoint device work may require exclusive control of Android2 candidate state; ordinary Android1 application work remains independent unless its validation explicitly changes shared device state.
+
 The produced distribution is staged into generated APK inputs by the app's Gradle pre-build tasks. The source distribution remains separate and ignored; only the audited output is eligible for staging. Physical-device conformance remains required after every runtime, layout, or asset-filter change.

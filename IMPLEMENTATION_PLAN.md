@@ -424,9 +424,17 @@ Execution plan: [`docs/delivery/M5_MATHLIB_INTEGRATION_PLAN.md`](docs/delivery/M
 
 Exit: representative Mathlib files work offline without process death, and the distribution method meets store and license requirements.
 
+#### Parallel execution policy
+
+M5 artifact production is a slow, resumable producer lane, not a global roadmap lock. At most one process may write `toolchain/work/mathlib-android2-producer`; its `flock`, state file, append-only log, conservative facet audit, and `--rehash --no-cache` restart path are the authority for recovery. A host crash or stopped producer does not invalidate finalized modules and must not trigger a clean rebuild.
+
+While a targeted or full Mathlib build runs, continue the foreground product lane with work that does not mutate the producer tree, Android2 Core/Std candidate, Mathlib pins, pack schema, or the same physical-device state needed by an immediate Mathlib gate. In particular, the dynamic Lake module corrective, M5.0 UI work, M5.1–M5.3 host-side implementation, M6 preparation, documentation, and API/emulator coverage may advance with validation proportional to their own boundaries. Schedule brief Mathlib artifact audits and tablet import/install/performance gates at producer checkpoints; those gates block promotion of the Mathlib pack, not unrelated implementation.
+
+Before starting or resuming a producer, run `mathlib/scripts/status-android2-build.sh`. Use the exact targeted/full recipes in the Mathlib integration plan and rebuilding guide. Prefer two producer jobs when foreground Gradle/emulator work needs capacity and up to four when the producer owns the machine; never start a second producer to change job count. Do not run broad cleanup, dependency updates, official cache substitution, or concurrent commands against the producer checkout.
+
 ### M5 corrective — Dynamic Lake module coverage
 
-Implement this immediately after the targeted `Mathlib.Data.Nat.Prime.Basic` build and basic Android import validation, before starting broader/full Mathlib production. This repairs the current generated-project configuration, whose hardcoded `roots = ["Main", "<Project>.Basic"]` recognizes the scaffolded `Basic.lean` module but not subsequently created sibling or top-level modules.
+Implement this in the foreground product lane without waiting for the targeted `Mathlib.Data.Nat.Prime.Basic` producer. Complete its own host and Android validation before starting broader/full Mathlib production. This repairs the current generated-project configuration, whose hardcoded `roots = ["Main", "<Project>.Basic"]` recognizes the scaffolded `Basic.lean` module but not subsequently created sibling or top-level modules.
 
 - Replace the `Basic`-specific library boundary with a canonical configuration derived from the current project topology. Keep `Main` explicit; cover the generated inner Lean project directory with a submodule glob; and add explicit roots/globs for every project-root `.lean` file and every other project-root module directory. Account for the case where a top-level `Foo.lean` and `Foo/` directory coexist so both `Foo` and its submodules remain buildable.
 - Centralize configuration reconciliation in `core-project`; UI and service code must not construct or patch Lake TOML. Reconcile atomically and deterministically after contained source/directory create or import, save/modify, rename/move, delete, Save As, project/archive/folder import, and project rename when its derived Lean identity changes. Also reconcile before Build/Run and Lean Server startup as a drift-recovery boundary. Do not rewrite the file when canonical bytes are unchanged.
@@ -585,9 +593,9 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Let the active targeted `Mathlib.Data.Nat.Prime.Basic` producer finish, audit its facets/header, and complete the basic Android2 import test without starting a concurrent producer.
-2. Immediately implement and validate the M5 dynamic Lake module-coverage corrective: inner-directory globbing, explicit top-level module reconciliation, supported-project migration, and the `<LeanProjectName>/New.lean` default path.
-3. Resume the version-matched offline Mathlib pack work and measure capacity, recovery, latency, memory, and thermal behavior without regressing the completed M2–M4 editor/project/LSP/lifecycle baselines.
+1. Treat Mathlib artifact production as a resumable parallel lane: inspect it with `mathlib/scripts/status-android2-build.sh`, resume the targeted `Mathlib.Data.Nat.Prime.Basic` command when machine capacity permits, and never run concurrent producers. At a successful target checkpoint, audit facets/header and complete the basic Android2 import test.
+2. In the foreground lane, implement and validate the M5 dynamic Lake module-coverage corrective now: inner-directory globbing, explicit top-level module reconciliation, supported-project migration, and the `<LeanProjectName>/New.lean` default path. It no longer waits for the slow targeted build, but must finish before broader/full Mathlib production.
+3. After both the targeted Android import gate and module corrective pass, start/resume the full version-matched Mathlib producer in parallel with independent product work. Measure capacity, recovery, latency, memory, and thermal behavior at explicit pack checkpoints without regressing the completed M2–M4 editor/project/LSP/lifecycle baselines.
 4. After the focused M5 Mathlib compatibility/feasibility gate, complete M5.0 in priority order: first Docked/Popup Output presentation with automatic Build/Run reveal, then enabled/disabled caret-anchored automatic LSP completion.
 5. Complete M5.1 general project files and explicit program-stream modes, then M5.2 direct definition/reference navigation and M5.3 symbol/font preferences before freezing features for M6 hardening and beta release.
 6. Keep auto-indent, code folding, Unicode abbreviation completion, and word wrap in post-beta M7 until their editing, source-mapping, IME, accessibility, and performance invariants are designed and measured.

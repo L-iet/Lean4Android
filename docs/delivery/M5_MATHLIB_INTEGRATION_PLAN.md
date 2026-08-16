@@ -6,7 +6,7 @@ Milestone: M5
 
 Depends on: the pinned Lean 4.32.1 Android runtime, M1.6's manifest-driven delivery work, and the M4 editor/LSP baseline
 
-Last updated: 2026-08-15
+Last updated: 2026-08-16
 
 ## Current checkpoint and immediate next actions
 
@@ -25,16 +25,21 @@ the official `Mathlib.Data.Nat.Prime.Basic` artifact with `incompatible header`.
 All copied incompatible Mathlib data has been removed from both apps on the
 tablet; their Core/Std installations and projects remain intact.
 
-A clean, pinned Android2 producer is now rebuilding the targeted compatibility
-gate `Mathlib.Data.Nat.Prime.Basic` with four jobs. At the last documentation
-checkpoint it had produced 79 `.olean` files after 2,738 seconds. Preserve the
-incremental producer tree and monitor:
+A clean, pinned Android2 producer is actively rebuilding the targeted
+compatibility gate `Mathlib.Data.Nat.Prime.Basic`. At the latest checkpoint its
+lock was held, its durable log was advancing, and it reported 473 finalized
+`.olean` files after Lake jobs through `[486/489]`. Its recorded PID is not
+visible from every shell/process namespace, so the lock and fresh durable log
+are authoritative. Inspect current state without disturbing the producer with:
 
 ```shell
-tail -f toolchain/output/mathlib-android2-basic-build.log
+mathlib/scripts/status-android2-build.sh
 ```
 
-If the host crashes, rerun the same command below. The wrapper locks the
+Do not invoke the command below while status reports a held lock. If the build
+finishes, use its terminal state for the artifact gate. If the host crashes or
+the lock later becomes free without a completed state, rerun the same command
+in its own terminal or long-lived command session. The wrapper locks the
 producer, audits interrupted outputs, removes only proven temporary/damaged
 module facets, and resumes healthy work with `--rehash --no-cache`:
 
@@ -46,14 +51,30 @@ LEAN4ANDROID_LOG_FILE="$PWD/toolchain/output/mathlib-android2-basic-build.log" \
   mathlib/scripts/build-android2-artifacts.sh
 ```
 
-Do not start a second producer while the current process is alive. After the
-targeted build exits successfully: audit its generated facets, headers, and
-hashes; stream only the rebuilt compatible slice to Android2; prove a real
-tablet import; and check for residual package-owned Lean/Lake processes. Only
-then start the full `Mathlib` target. The early full-build estimate is 8,654
+Use two jobs if concurrent foreground Gradle/emulator work needs machine
+capacity, or up to four when Mathlib owns the machine. Change this only on a
+later invocation; do not interrupt a healthy producer merely to change job
+count. Never start a second producer. After the targeted build exits
+successfully: audit its generated facets, headers, and hashes; stream only the
+rebuilt compatible slice to Android2; prove a real tablet import; and check for
+residual package-owned Lean/Lake processes. Only then, and after the dynamic
+Lake module corrective, start the full `Mathlib` target using the full-build
+recipe in `toolchain/README.md`. The early full-build estimate is 8,654
 jobs / 8,651 `.olean` files and roughly 75-100 hours (central estimate 85-90
 hours) at the observed early `/mnt/d` rate; revise this estimate as the sample
 grows.
+
+### Parallel foreground lane
+
+Artifact production gates only Mathlib pack promotion. While it runs or waits
+for machine capacity, continue independent work: the dynamic Lake module
+corrective first, then M5.0 UI, M5.1–M5.3 host-side implementation, M6
+preparation, documentation, and API/emulator coverage. Each change retains its
+normal focused/full validation. Pause the foreground lane only when it would
+mutate the pinned producer checkout, Android2 Core/Std or pack contract, or the
+same tablet state needed by an immediate artifact checkpoint. Record producer
+state and the exact resume command in implementation history at every handoff;
+never infer liveness from an old PID or `running` file.
 
 ## 1. Objective
 
