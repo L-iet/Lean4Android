@@ -1,10 +1,59 @@
 # M5 Mathlib integration plan
 
-Status: planned
+Status: Phase B active — producing Android2-compatible Mathlib artifacts
 
 Milestone: M5
 
 Depends on: the pinned Lean 4.32.1 Android runtime, M1.6's manifest-driven delivery work, and the M4 editor/LSP baseline
+
+Last updated: 2026-08-15
+
+## Current checkpoint and immediate next actions
+
+Android1 is the accepted product line through M4.6. M5 uses the isolated
+`lean-4.32.1-android2` runtime and `org.lean4android.app.android2candidate`; it
+does not promote or rebuild Android1.
+
+The Android2 Core/Std distribution and isolated candidate APK are packaged and
+host-audited. The APK has also passed direct Run, Lean Server readiness, focused
+LSP conformance, and forced-cleanup checks on the API-33 reference tablet. This
+is focused compatibility evidence, not yet the complete M0-M4 device matrix.
+
+The official Mathlib cache is incompatible with both Android runtimes. Matching
+Lean display version and commit are insufficient: the Android2 runtime rejects
+the official `Mathlib.Data.Nat.Prime.Basic` artifact with `incompatible header`.
+All copied incompatible Mathlib data has been removed from both apps on the
+tablet; their Core/Std installations and projects remain intact.
+
+A clean, pinned Android2 producer is now rebuilding the targeted compatibility
+gate `Mathlib.Data.Nat.Prime.Basic` with four jobs. At the last documentation
+checkpoint it had produced 79 `.olean` files after 2,738 seconds. Preserve the
+incremental producer tree and monitor:
+
+```shell
+tail -f toolchain/output/mathlib-android2-basic-build.log
+```
+
+If the host crashes, rerun the same command below. The wrapper locks the
+producer, audits interrupted outputs, removes only proven temporary/damaged
+module facets, and resumes healthy work with `--rehash --no-cache`:
+
+```shell
+LEAN4ANDROID_JOBS=4 \
+LEAN4ANDROID_PROGRESS_INTERVAL_SECONDS=30 \
+LEAN4ANDROID_MATHLIB_TARGET=Mathlib.Data.Nat.Prime.Basic \
+LEAN4ANDROID_LOG_FILE="$PWD/toolchain/output/mathlib-android2-basic-build.log" \
+  mathlib/scripts/build-android2-artifacts.sh
+```
+
+Do not start a second producer while the current process is alive. After the
+targeted build exits successfully: audit its generated facets, headers, and
+hashes; stream only the rebuilt compatible slice to Android2; prove a real
+tablet import; and check for residual package-owned Lean/Lake processes. Only
+then start the full `Mathlib` target. The early full-build estimate is 8,654
+jobs / 8,651 `.olean` files and roughly 75-100 hours (central estimate 85-90
+hours) at the observed early `/mnt/d` rate; revise this estimate as the sample
+grows.
 
 ## 1. Objective
 
@@ -38,14 +87,14 @@ The integration has four distinct layers:
 Mathlib should have its own immutable pack root and marker rather than being copied into every project or merged destructively into the Core/Std installation. A conceptual identity is:
 
 ```text
-mathlib-<mathlib-revision>-lean-4.32.1-android1
+mathlib-<mathlib-revision>-lean-4.32.1-android2
 ```
 
 The final spelling and schema belong in a versioned manifest and must not depend on an APK's randomized native-library path.
 
 ### 3.1 Storage model and open questions
 
-Storage is a first-class M5 feasibility gate, not an implementation detail. The current filtered Core/Std runtime already occupies about 2.19 GB expanded on the reference device. Mathlib will add source and the complete compiled/server facets proven necessary in Phase B, but its size for the selected revision is unknown until the unfiltered inventory is produced.
+Storage is a first-class M5 feasibility gate, not an implementation detail. The current filtered Core/Std runtime occupies about 2.19 GB expanded on the reference device. Phase A measured the official-cache completeness-first tree at 122,207 records / 6,955,114,198 logical bytes before filtering. It included 8,651 `.olean` files (1,882,088,688 bytes), 8,639 `.olean.private` files (3,685,716,976 bytes), 286,315,370 bytes of `.ilean`, 103,350,296 bytes of `.olean.server`, 274,036,040 bytes of `.ir`, and 486,266,715 bytes of generated C. The source inventory is 9,778 files / 113,350,974 bytes. These measurements establish scale, but not the final Android2 pack size: all compiled facets must be regenerated against Android2 and Phase B must prove which facets may safely be omitted.
 
 Keep these quantities separate in every report:
 
@@ -102,7 +151,14 @@ The final M5 report must state measured minimum and recommended conditions, incl
 
 ## 4. High-level implementation process
 
-### Phase A — Pin and inventory
+### Phase A — Pin and inventory (complete)
+
+Pinned Mathlib v4.32.1 at commit `520045ab…` with eight locked dependencies.
+The official cache supplied 8,639 compressed archives totaling 439,158,169
+bytes. The complete inventory and provenance baseline are recorded in
+[`M5_PHASE_A_BASELINE.md`](M5_PHASE_A_BASELINE.md). One known x86 host-cache
+executable and three symlinks were identified and excluded from Android pack
+candidates.
 
 1. Select the Mathlib revision that officially targets the pinned Lean revision and record all upstream source hashes and licenses.
 2. Build or obtain its dependency closure from pinned, auditable inputs in a network-enabled producer environment. The Android app remains offline and never performs this resolution.
@@ -111,7 +167,16 @@ The final M5 report must state measured minimum and recommended conditions, incl
 
 Output: an unfiltered, reproducible candidate tree and provenance report bound to exact Lean and Mathlib identities.
 
-### Phase B — Establish the minimum complete artifact set
+### Phase B — Establish the minimum complete artifact set (active)
+
+The official release cache failed the Android1 and Android2 compatibility gate.
+For Android2, both artifacts report Lean 4.32.1 commit `f054605…`, but the
+official Mathlib header begins `olean 02 01` while Android2 `Init.olean` begins
+`olean 02 00`; a real narrow tablet import failed in seven seconds. The clean
+producer therefore combines host stage1 executables with the audited Android2
+`lib/lean` dependency closure and rebuilds every Mathlib artifact against that
+exact closure. Facet minimization and broad conformance remain blocked on this
+producer compatibility gate.
 
 1. Start from completeness rather than an assumed `.olean`-only package.
 2. Run representative host workflows and compare filesystem access/audits to determine which facets each supported capability uses.
@@ -121,7 +186,12 @@ Output: an unfiltered, reproducible candidate tree and provenance report bound t
 
 Output: a documented inclusion policy and conformance corpus. Passing `import Mathlib` alone is not sufficient evidence.
 
-### Phase C — Define and produce the signed pack
+### Phase C — Define and produce the signed pack (partial)
+
+The dependency-pack manifest parser/verifier and bounded staging-source
+installer exist in `core-toolchain`, with focused hostile path, hash,
+executable-content, and symlink tests passing. Reproducible Mathlib pack output,
+signing, channel artifacts, and their byte audits remain pending.
 
 1. Extend or specialize the existing manifest model for dependency packs. At minimum, bind:
    - schema version and immutable pack ID;
@@ -139,7 +209,12 @@ Output: a documented inclusion policy and conformance corpus. Passing `import Ma
 
 Output: byte-audited Play and independent artifacts that represent the same logical pack.
 
-### Phase D — Implement recoverable installation lifecycle
+### Phase D — Implement recoverable installation lifecycle (partial)
+
+Bounded streaming from a declared dependency-pack source is implemented and
+tested. Atomic activation, rollback, durable status, cancellation recovery,
+update/removal coordination, and full on-device lifecycle validation remain
+pending.
 
 1. Add a dependency-pack source abstraction or safely generalize the existing `RuntimePayloadSource` boundary without weakening Core/Std validation.
 2. Before installation, authenticate the pack metadata, check exact toolchain compatibility, report download and expanded sizes, and preflight enough space for staging plus any retained rollback copy.
@@ -150,7 +225,7 @@ Output: byte-audited Play and independent artifacts that represent the same logi
 
 Output: an idempotent install/update/remove/recovery state machine shared by both delivery channels.
 
-### Phase E — Add status and project selection UI
+### Phase E — Add status and project selection UI (planned)
 
 1. Add a Mathlib/dependency-pack screen showing Not installed, Downloading/Importing, Verifying, Installed, Incompatible, Corrupt, Failed, and Removal states with version and storage information.
 2. Provide install/import, retry, verify, and remove actions with truthful progress, cancellation boundaries, and actionable errors.
@@ -161,7 +236,7 @@ Output: an idempotent install/update/remove/recovery state machine shared by bot
 
 Output: a user can install Mathlib once, enable it per project, work offline, and understand missing/incompatible states.
 
-### Phase F — Validate feasibility and choose the release shape
+### Phase F — Validate feasibility and choose the release shape (planned)
 
 Run the complete matrix on the API-33 reference tablet, at least one representative mid-range arm64/API-29+ device, and the current Android target:
 
@@ -182,17 +257,18 @@ Output: an M5 decision report selecting the shipped channel/configuration or ide
 
 ## 5. Suggested implementation slices
 
-The work should land in recoverable, independently reviewable slices:
+The work should land in recoverable, independently reviewable slices. Current
+status is shown below:
 
-1. pins, provenance, full candidate build, inventory, and license audit;
-2. Android conformance corpus and complete-facet proof;
-3. dependency-pack manifest/parser/verifier and hostile fixtures;
-4. reproducible pack producers for independent and Play channels;
-5. streaming staging/activation/removal/recovery lifecycle;
-6. status/progress/storage UI;
-7. typed per-project selection and consistent Lake/LSP wiring;
-8. full host, APK, migration, offline, and physical-device acceptance; and
-9. final size/performance/security decision and release documentation.
+1. **Complete:** pins, provenance, official-cache inventory, and license audit.
+2. **Active:** Android2-compatible producer, Android conformance corpus, and complete-facet proof.
+3. **Partial:** dependency-pack manifest/parser/verifier and hostile fixtures.
+4. **Pending:** reproducible pack producers for independent and Play channels.
+5. **Partial:** streaming staging exists; activation/removal/recovery lifecycle remains.
+6. **Pending:** status/progress/storage UI.
+7. **Pending:** typed per-project selection and consistent Lake/LSP wiring.
+8. **Pending:** full host, APK, migration, offline, and physical-device acceptance.
+9. **Pending:** final size/performance/security decision and release documentation.
 
 Each lengthy production or device-validation step must leave a checkpoint in `IMPLEMENTATION_HISTORY.md` with the trustworthy artifact paths and hashes, live-process state, failures, and exact resume command.
 
@@ -236,6 +312,8 @@ Possible evidence-based outcomes include:
 - [`IMPLEMENTATION_PLAN.md`](../../IMPLEMENTATION_PLAN.md), sections 4.3–4.4 and M5
 - [`M1_6_DECISION.md`](M1_6_DECISION.md), shared delivery and streaming-installer decision
 - [`M1_6_BASELINE.md`](M1_6_BASELINE.md), current core runtime size baseline
+- [`M5_PHASE_A_BASELINE.md`](M5_PHASE_A_BASELINE.md), pinned Mathlib inventory and size evidence
+- [`mathlib/README.md`](../../mathlib/README.md), producer, monitoring, and crash-recovery commands
 - [`PROJECT_CONFIGURATION_DESIGN.md`](../project/PROJECT_CONFIGURATION_DESIGN.md), typed dependency selection and unsupported package workflows
 - [`MVP_AND_REBUILDING.md`](../../MVP_AND_REBUILDING.md), build, recovery, APK, and device-validation procedures
 - [`docs/adr/0001-android-lean-process-and-runtime-boundary.md`](../adr/0001-android-lean-process-and-runtime-boundary.md), executable-code and child-process boundary
