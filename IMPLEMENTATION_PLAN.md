@@ -424,6 +424,21 @@ Execution plan: [`docs/delivery/M5_MATHLIB_INTEGRATION_PLAN.md`](docs/delivery/M
 
 Exit: representative Mathlib files work offline without process death, and the distribution method meets store and license requirements.
 
+### M5 corrective — Dynamic Lake module coverage
+
+Implement this immediately after the targeted `Mathlib.Data.Nat.Prime.Basic` build and basic Android import validation, before starting broader/full Mathlib production. This repairs the current generated-project configuration, whose hardcoded `roots = ["Main", "<Project>.Basic"]` recognizes the scaffolded `Basic.lean` module but not subsequently created sibling or top-level modules.
+
+- Replace the `Basic`-specific library boundary with a canonical configuration derived from the current project topology. Keep `Main` explicit; cover the generated inner Lean project directory with a submodule glob; and add explicit roots/globs for every project-root `.lean` file and every other project-root module directory. Account for the case where a top-level `Foo.lean` and `Foo/` directory coexist so both `Foo` and its submodules remain buildable.
+- Centralize configuration reconciliation in `core-project`; UI and service code must not construct or patch Lake TOML. Reconcile atomically and deterministically after contained source/directory create or import, save/modify, rename/move, delete, Save As, project/archive/folder import, and project rename when its derived Lean identity changes. Also reconcile before Build/Run and Lean Server startup as a drift-recovery boundary. Do not rewrite the file when canonical bytes are unchanged.
+- Treat a content-only save as an idempotent reconciliation trigger even though it ordinarily leaves module membership unchanged. A failed configuration update must not leave the source mutation reported as fully successful with stale build metadata; define transaction/recovery ordering and retain truthful recovery state.
+- Change Files → **New** to prefill `<LeanProjectName>/New.lean`, using the project's derived Lean name rather than its display/storage ID. Keep the entire project-relative path editable: users may remove the prefix to create a sibling of `Main.lean` or replace it with another contained module directory.
+- Validate every path component used as a Lean module name, preserve traversal and case-folded-collision protections, and give a clear inline error for paths that are safe filesystem names but invalid or ambiguous Lean module paths. Continue to reject unsupported executable/native/network Lake configuration.
+- Migrate existing app-managed projects conservatively. Parse and verify the supported generated configuration, preserve supported user-authored package fields, and avoid silently rewriting arbitrary imported Lake projects whose semantics the app cannot safely round-trip. Define an explicit unsupported/manual-repair result where canonical reconciliation is not safe.
+- Add host tests for scaffold output, default New path derivation, nested siblings, arbitrary top-level files/directories, file-plus-directory name overlap, every lifecycle trigger, unchanged-byte saves, rename/delete cleanup, crash/failure recovery, existing-project migration, deterministic TOML, and hostile/unsupported configurations.
+- Add Android validation that creates and imports modules both beside `Main.lean` and under the generated inner directory, observes successful LSP imports after reconciliation, completes offline Build and Run, survives Activity/process recreation and project rename, and leaves no Lean/Lake child. Retain the visible two-tab editor and M2–M4 lifecycle baselines.
+
+Exit: a user can create, import, save, rename, move, and delete Lean modules anywhere within the supported project tree; Lake and Lean Server use a deterministic up-to-date module configuration; Files → New defaults to the generated inner project directory without preventing top-level placement; and existing supported projects migrate without data loss.
+
 ### M5.0 — Near-term output and completion UX
 
 Implement these in the listed priority order after the focused M5 Mathlib compatibility/feasibility gate and before the broader M5.1 editor expansion.
@@ -570,13 +585,15 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
-1. Begin M5 with the version-matched offline Mathlib pack and measure capacity, recovery, latency, memory, and thermal behavior without regressing the completed M4.6 editor/pane/tree/lifecycle baselines.
-2. After the focused M5 Mathlib compatibility/feasibility gate, complete M5.0 in priority order: first Docked/Popup Output presentation with automatic Build/Run reveal, then enabled/disabled caret-anchored automatic LSP completion.
-3. Complete M5.1 general project files and explicit program-stream modes, then M5.2 direct definition/reference navigation and M5.3 symbol/font preferences before freezing features for M6 hardening and beta release.
-4. Keep auto-indent, code folding, Unicode abbreviation completion, and word wrap in post-beta M7 until their editing, source-mapping, IME, accessibility, and performance invariants are designed and measured.
-5. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
-6. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
-7. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
+1. Let the active targeted `Mathlib.Data.Nat.Prime.Basic` producer finish, audit its facets/header, and complete the basic Android2 import test without starting a concurrent producer.
+2. Immediately implement and validate the M5 dynamic Lake module-coverage corrective: inner-directory globbing, explicit top-level module reconciliation, supported-project migration, and the `<LeanProjectName>/New.lean` default path.
+3. Resume the version-matched offline Mathlib pack work and measure capacity, recovery, latency, memory, and thermal behavior without regressing the completed M2–M4 editor/project/LSP/lifecycle baselines.
+4. After the focused M5 Mathlib compatibility/feasibility gate, complete M5.0 in priority order: first Docked/Popup Output presentation with automatic Build/Run reveal, then enabled/disabled caret-anchored automatic LSP completion.
+5. Complete M5.1 general project files and explicit program-stream modes, then M5.2 direct definition/reference navigation and M5.3 symbol/font preferences before freezing features for M6 hardening and beta release.
+6. Keep auto-indent, code folding, Unicode abbreviation completion, and word wrap in post-beta M7 until their editing, source-mapping, IME, accessibility, and performance invariants are designed and measured.
+7. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+8. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
+9. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 
