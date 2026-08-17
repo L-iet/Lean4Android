@@ -123,6 +123,12 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
 
+internal sealed interface RunInputSelection {
+    data object ImmediateEof : RunInputSelection
+    data object Interactive : RunInputSelection
+    data class ProjectFile(val relativePath: String, val useSavedVersion: Boolean) : RunInputSelection
+}
+
 private const val LIBRARY_SOURCE = """namespace VisualProbe
 
 def answer : Nat := 42
@@ -290,6 +296,7 @@ class MainActivity : ComponentActivity() {
                     onVerifyRuntime = ::verifyRuntime,
                     projects = repository.list().map { it.id },
                     projectFiles = repository.open(activeProjectId).sourceFiles,
+                    projectInputFiles = repository.listInputFiles(activeProjectId),
                     recentProjects = recentProjects(),
                     onOpenProject = ::switchProject,
                     onImportArchive = { archivePicker.launch(arrayOf("application/zip", "application/octet-stream")) },
@@ -939,7 +946,11 @@ class MainActivity : ComponentActivity() {
         return deleted
     }
 
-    private fun checkLeanSource(sources: Map<String, String>, stdinPlan: StdinPlan, update: (EditorRunState) -> Unit) {
+    private fun checkLeanSource(
+        sources: Map<String, String>,
+        inputSelection: RunInputSelection,
+        update: (EditorRunState) -> Unit,
+    ) {
         thread(name = "lean-editor-check") {
             runCatching {
                 val locator = AndroidToolchainLocator(applicationContext)
@@ -956,7 +967,28 @@ class MainActivity : ComponentActivity() {
                 val buildCommand = repository.lakeBuild(factory, activeProjectId)
                 val entry = repository.open(activeProjectId).sourceFiles.firstOrNull { it == "Main.lean" }
                     ?: repository.open(activeProjectId).sourceFiles.first()
-                runOnUiThread { startBuildThenRun(buildCommand, repository.leanProgram(factory, activeProjectId, entry), entry, stdinPlan, update) }
+                val runCommand = repository.leanProgram(factory, activeProjectId, entry)
+                val revision = (inputSelection as? RunInputSelection.ProjectFile)?.let {
+                    repository.resolveInputRevision(activeProjectId, it.relativePath)
+                }
+                val stdinPlan = when (inputSelection) {
+                    RunInputSelection.ImmediateEof -> StdinPlan.ImmediateEof
+                    RunInputSelection.Interactive -> StdinPlan.Interactive
+                    is RunInputSelection.ProjectFile -> StdinPlan.Bytes(requireNotNull(revision).openSource())
+                }
+                val runInput = revision?.let {
+                    ProjectRunInput.ProjectFile(
+                        relativePath = it.relativePath,
+                        expectedBytes = it.expectedBytes,
+                        sha256 = it.sha256,
+                        usesSavedVersion = inputSelection.useSavedVersion,
+                    )
+                }
+                runOnUiThread {
+                    startBuildThenRun(
+                        buildCommand, runCommand, entry, stdinPlan, runInput, update,
+                    )
+                }
             }.onFailure { failure -> runOnUiThread { update(EditorRunState.Failed(failure.message ?: failure::class.java.simpleName)) } }
         }
     }
@@ -966,15 +998,17 @@ class MainActivity : ComponentActivity() {
         runCommand: org.lean4android.process.ProcessCommand,
         entry: String,
         stdinPlan: StdinPlan,
+        runInput: ProjectRunInput.ProjectFile?,
         update: (EditorRunState) -> Unit,
     ) {
         val service = jobService
         if (service == null) {
+            closeRunStdinPlan(stdinPlan)
             update(EditorRunState.Failed("Run service is not connected"))
             return
         }
         activeRunUpdate = update
-        val snapshot = service.startRun(buildCommand, runCommand, entry, stdinPlan)
+        val snapshot = service.startRun(buildCommand, runCommand, entry, stdinPlan, runInput)
         latestRunSnapshot = snapshot
         if (snapshot.state != ProcessJobState.Running) {
             activeRunUpdate?.invoke(snapshot.toEditorRunState())
@@ -1154,7 +1188,7 @@ private fun LeanEditorScreen(
     onSave: (EditorSessionState) -> EditorSessionState,
     onSaveAll: (EditorSessionState) -> EditorSessionState,
     onSaveAs: (EditorSessionState, String) -> EditorSessionState,
-    onCheck: (Map<String, String>, StdinPlan, (EditorRunState) -> Unit) -> Unit,
+    onCheck: (Map<String, String>, RunInputSelection, (EditorRunState) -> Unit) -> Unit,
     onCancel: () -> Unit,
     retainedRun: ProjectRunSnapshot?,
     onSendInput: (String, Boolean) -> InputOperationResult,
@@ -1162,6 +1196,7 @@ private fun LeanEditorScreen(
     onVerifyRuntime: ((EditorRunState) -> Unit) -> Unit,
     projects: List<String>,
     projectFiles: List<String>,
+    projectInputFiles: List<String>,
     recentProjects: List<String>,
     onOpenProject: (String) -> Unit,
     onImportArchive: () -> Unit,
@@ -1210,7 +1245,11 @@ private fun LeanEditorScreen(
     var outputCollapsed by rememberSaveable { mutableStateOf(false) }
     var outputPopupVisible by rememberSaveable { mutableStateOf(false) }
     var runInputDialog by rememberSaveable { mutableStateOf(false) }
-    var interactiveRunSelected by rememberSaveable { mutableStateOf(false) }
+    var runInputMode by rememberSaveable { mutableStateOf("eof") }
+    var selectedProjectInput by rememberSaveable(projectInputFiles) {
+        mutableStateOf(projectInputFiles.firstOrNull().orEmpty())
+    }
+    var projectInputDirtyChoice by rememberSaveable { mutableStateOf(false) }
     var openWorkspace by remember { mutableStateOf(false) }
     var newProjectDialog by rememberSaveable { mutableStateOf(false) }
     var newProjectName by rememberSaveable { mutableStateOf("") }
@@ -1307,7 +1346,7 @@ private fun LeanEditorScreen(
         publish(next.select(target.path))
     }
 
-    fun buildProject(stdinPlan: StdinPlan) {
+    fun buildProject(inputSelection: RunInputSelection) {
         if (running) return
         revealOutput(outputPresentation, outputCollapsed).also { reveal ->
             outputCollapsed = reveal.dockedCollapsed
@@ -1315,10 +1354,15 @@ private fun LeanEditorScreen(
         }
         runState = EditorRunState.Running
         outputSnapshot = formatRunState(runState)
-        onCheck(editor.tabs.associate { it.path to it.contents }, stdinPlan) { result ->
+        val sourcesToSave = sourcesToSaveForRun(editor, inputSelection)
+        onCheck(sourcesToSave, inputSelection) { result ->
             runState = result
             outputSnapshot = formatRunState(result)
-            if (result is EditorRunState.Finished) publish(editor.markSaved())
+            if (result is EditorRunState.Finished) {
+                var saved = editor
+                sourcesToSave.keys.forEach { path -> saved = saved.markSaved(path) }
+                publish(saved)
+            }
         }
     }
 
@@ -1346,23 +1390,71 @@ private fun LeanEditorScreen(
         title = { Text("Run input") },
         text = {
             Column {
-                TextButton(onClick = { interactiveRunSelected = false }) {
-                    RadioButton(selected = !interactiveRunSelected, onClick = null)
+                TextButton(onClick = { runInputMode = "eof" }) {
+                    RadioButton(selected = runInputMode == "eof", onClick = null)
                     Text("None (EOF)")
                 }
-                TextButton(onClick = { interactiveRunSelected = true }) {
-                    RadioButton(selected = interactiveRunSelected, onClick = null)
+                TextButton(onClick = { runInputMode = "interactive" }) {
+                    RadioButton(selected = runInputMode == "interactive", onClick = null)
                     Text("Interactive")
+                }
+                TextButton(
+                    enabled = projectInputFiles.isNotEmpty(),
+                    onClick = { runInputMode = "project" },
+                ) {
+                    RadioButton(selected = runInputMode == "project", onClick = null)
+                    Text("Project file")
+                }
+                if (runInputMode == "project") Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                    projectInputFiles.forEach { path ->
+                        TextButton(onClick = { selectedProjectInput = path }) {
+                            RadioButton(selected = selectedProjectInput == path, onClick = null)
+                            Text(path)
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                runInputDialog = false
-                buildProject(if (interactiveRunSelected) StdinPlan.Interactive else StdinPlan.ImmediateEof)
+            TextButton(enabled = runInputMode != "project" || selectedProjectInput.isNotEmpty(), onClick = {
+                when (runInputMode) {
+                    "interactive" -> { runInputDialog = false; buildProject(RunInputSelection.Interactive) }
+                    "project" -> {
+                        val path = selectedProjectInput
+                        val dirty = editor.tabs.singleOrNull { it.path == path }?.dirty == true
+                        if (dirty) projectInputDirtyChoice = true else {
+                            runInputDialog = false
+                            buildProject(RunInputSelection.ProjectFile(path, useSavedVersion = false))
+                        }
+                    }
+                    else -> { runInputDialog = false; buildProject(RunInputSelection.ImmediateEof) }
+                }
             }) { Text("Run") }
         },
         dismissButton = { TextButton(onClick = { runInputDialog = false }) { Text("Cancel") } },
+    )
+
+    if (projectInputDirtyChoice) AlertDialog(
+        onDismissRequest = { projectInputDirtyChoice = false },
+        title = { Text("Unsaved project input") },
+        text = { Text("$selectedProjectInput has unsaved changes. Choose which revision to send.") },
+        confirmButton = {
+            TextButton(onClick = {
+                projectInputDirtyChoice = false
+                runInputDialog = false
+                buildProject(RunInputSelection.ProjectFile(selectedProjectInput, useSavedVersion = false))
+            }) { Text("Save and Run") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = {
+                    projectInputDirtyChoice = false
+                    runInputDialog = false
+                    buildProject(RunInputSelection.ProjectFile(selectedProjectInput, useSavedVersion = true))
+                }) { Text("Run saved version") }
+                TextButton(onClick = { projectInputDirtyChoice = false }) { Text("Cancel") }
+            }
+        },
     )
 
     Scaffold(
@@ -2688,6 +2780,14 @@ private fun OutputPanel(
         shape = style.shape,
     ) {
         Column {
+            (runSnapshot?.input as? ProjectRunInput.ProjectFile)?.let { input ->
+                Text(
+                    "Project input: ${input.relativePath} • ${input.expectedBytes} bytes" +
+                        if (input.usesSavedVersion) " • saved version" else "",
+                    modifier = Modifier.padding(style.contentPadding),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
             SelectionContainer {
                 Text(
                     text = output,
@@ -2724,8 +2824,31 @@ private fun OutputPanel(
                     TextButton(onClick = onCancel) { Text("Cancel") }
                 }
             }
+            if (runSnapshot?.phase == ProjectRunPhase.Program && runSnapshot.input is ProjectRunInput.ProjectFile) {
+                Text(
+                    when (stdin) {
+                        is StdinState.Streaming -> "Sending project input: ${stdin.sentBytes} / ${stdin.totalBytes} bytes"
+                        is StdinState.Failed -> "Project input failed after ${stdin.sentBytes} / ${stdin.totalBytes} bytes: ${stdin.message}"
+                        is StdinState.Closed -> if (stdin.reason == StdinState.CloseReason.TransferComplete) {
+                            "Project input sent"
+                        } else "Project input closed: ${stdin.reason}"
+                        else -> "Preparing project input"
+                    },
+                    modifier = Modifier.padding(style.contentPadding),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
         }
     }
+}
+
+internal fun sourcesToSaveForRun(
+    editor: EditorSessionState,
+    inputSelection: RunInputSelection,
+): Map<String, String> {
+    val excludedSavedPath = (inputSelection as? RunInputSelection.ProjectFile)
+        ?.takeIf { it.useSavedVersion }?.relativePath
+    return editor.tabs.filterNot { it.path == excludedSavedPath }.associate { it.path to it.contents }
 }
 
 private fun formatRunState(state: EditorRunState): String = when (state) {

@@ -175,6 +175,30 @@ class LeanProjectRepository(
         return ProjectInputRevision(projectId, relativePath, observed.bytes, observed.sha256, projectRoot, inputPath)
     }
 
+    /** Lists saved files eligible for project-file stdin; generated/private and unsafe entries stay hidden. */
+    fun listInputFiles(projectId: String): List<String> {
+        val project = open(projectId)
+        val paths = mutableListOf<String>()
+        Files.walkFileTree(project.directory.toPath(), object : java.nio.file.SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(directory: Path, attributes: BasicFileAttributes): java.nio.file.FileVisitResult {
+                if (directory != project.directory.toPath() && (attributes.isSymbolicLink || directory.fileName.toString().startsWith('.'))) {
+                    return java.nio.file.FileVisitResult.SKIP_SUBTREE
+                }
+                return java.nio.file.FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(file: Path, attributes: BasicFileAttributes): java.nio.file.FileVisitResult {
+                val relative = project.directory.toPath().relativize(file).toString().replace(File.separatorChar, '/')
+                if (attributes.isRegularFile && !attributes.isSymbolicLink && attributes.size() <= MAX_PROJECT_FILE_BYTES &&
+                    relative != METADATA && relative.split('/').none { it.startsWith('.') }) {
+                    paths += relative
+                }
+                return java.nio.file.FileVisitResult.CONTINUE
+            }
+        })
+        return paths.sorted()
+    }
+
     fun createSource(projectId: String, relativePath: String, contents: String = "") : LeanProject {
         val project = open(projectId)
         val destination = resolveContained(project.directory, relativePath)

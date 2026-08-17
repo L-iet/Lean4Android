@@ -293,6 +293,27 @@ class LeanProjectRepositoryTest {
         expectFailure("exceeds 64 MiB") { repository.resolveInputRevision("sample", "oversized.bin") }
     }
 
+    @Test fun selectableProjectInputsAreDeterministicRegularBoundedAndExcludePrivateState() {
+        val repository = LeanProjectRepository(temporary.newFolder("input-list"), "toolchain")
+        val project = repository.create("sample")
+        project.directory.resolve("z-input.txt").writeText("z")
+        project.directory.resolve("Data/a-input.txt").apply { parentFile?.mkdirs(); writeText("a") }
+        project.directory.resolve(".lake/build/private.bin").apply { parentFile?.mkdirs(); writeText("private") }
+        project.directory.resolve(".hidden").writeText("hidden")
+        RandomAccessFile(project.directory.resolve("oversized.bin"), "rw").use { it.setLength(64L * 1024 * 1024 + 1) }
+        runCatching {
+            Files.createSymbolicLink(project.directory.resolve("linked.txt").toPath(), project.directory.resolve("z-input.txt").toPath())
+        }
+
+        val inputs = repository.listInputFiles("sample")
+
+        assertEquals(inputs.sorted(), inputs)
+        assertTrue("Data/a-input.txt" in inputs)
+        assertTrue("z-input.txt" in inputs)
+        assertTrue("Main.lean" in inputs)
+        assertFalse(inputs.any { it.startsWith('.') || it == "oversized.bin" || it == "linked.txt" })
+    }
+
     @Test fun folderAndStandaloneImportsActivateOnlyValidatedCopies() {
         val root = temporary.newFolder("projects")
         val repository = LeanProjectRepository(root, "toolchain")

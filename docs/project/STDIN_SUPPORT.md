@@ -1,6 +1,6 @@
 # Standard input support
 
-- Status: implementation design for M5.1
+- Status: immediate-EOF, interactive, and contained project-file stdin implemented and accepted on API 33; separate stdout/stderr export remains
 - Scope: user-triggered Lean program runs
 - Depends on: the accepted child-process boundary in [ADR 0001](../adr/0001-android-lean-process-and-runtime-boundary.md)
 

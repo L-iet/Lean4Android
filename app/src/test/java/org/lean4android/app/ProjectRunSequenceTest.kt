@@ -31,6 +31,27 @@ class ProjectRunSequenceTest {
         assertTrue(source.closed)
     }
 
+    @Test fun `saved-version project input is excluded from pre-run saves`() {
+        val editor = EditorSessionState(
+            "sample",
+            listOf(
+                EditorTab("Main.lean", "old main", "new main"),
+                EditorTab("input.txt", "saved bytes", "dirty bytes"),
+            ),
+            "Main.lean",
+        )
+
+        val savedVersion = sourcesToSaveForRun(
+            editor, RunInputSelection.ProjectFile("input.txt", useSavedVersion = true),
+        )
+        val saveAndRun = sourcesToSaveForRun(
+            editor, RunInputSelection.ProjectFile("input.txt", useSavedVersion = false),
+        )
+
+        assertEquals(mapOf("Main.lean" to "new main"), savedVersion)
+        assertEquals(mapOf("Main.lean" to "new main", "input.txt" to "dirty bytes"), saveAndRun)
+    }
+
     private class ClosingSource : InputByteSource {
         override val expectedBytes = 0L
         var closed = false
