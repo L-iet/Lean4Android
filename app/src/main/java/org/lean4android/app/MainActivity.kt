@@ -109,6 +109,7 @@ import org.lean4android.process.ProcessJobState
 import org.lean4android.process.StdinPlan
 import org.lean4android.process.StdinState
 import org.lean4android.process.InputOperationResult
+import org.lean4android.process.CapturedOutput
 import org.lean4android.project.LeanProjectRepository
 import org.lean4android.toolchain.AndroidToolchainLocator
 import org.lean4android.toolchain.ToolchainCommandFactory
@@ -127,6 +128,18 @@ internal sealed interface RunInputSelection {
     data object ImmediateEof : RunInputSelection
     data object Interactive : RunInputSelection
     data class ProjectFile(val relativePath: String, val useSavedVersion: Boolean) : RunInputSelection
+}
+
+internal enum class OutputStreamKind(val label: String) { Stdout("stdout"), Stderr("stderr") }
+private data class PendingOutputExport(val stream: OutputStreamKind, val capture: CapturedOutput)
+
+internal fun ProjectRunSnapshot.capture(stream: OutputStreamKind): CapturedOutput? {
+    val captures = when (val terminal = state) {
+        is ProcessJobState.Completed -> terminal.result.stdoutCapture to terminal.result.stderrCapture
+        is ProcessJobState.Cancelled -> terminal.stdoutCapture to terminal.stderrCapture
+        else -> return null
+    }
+    return if (stream == OutputStreamKind.Stdout) captures.first else captures.second
 }
 
 private const val LIBRARY_SOURCE = """namespace VisualProbe
@@ -168,6 +181,7 @@ class MainActivity : ComponentActivity() {
     private val goalRequestRunnables = mutableMapOf<String, Runnable>()
     private var automaticLspRestartAttempts = 0
     private var activeRunUpdate: ((EditorRunState) -> Unit)? = null
+    private var pendingOutputExport: PendingOutputExport? = null
     private val archivePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { importArchive(it) }
     }
@@ -189,6 +203,15 @@ class MainActivity : ComponentActivity() {
         if (uri == null) {
             android.widget.Toast.makeText(this, "Export cancelled", android.widget.Toast.LENGTH_SHORT).show()
         } else exportProject(uri)
+    }
+    private val outputExportPicker = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        val export = pendingOutputExport
+        pendingOutputExport = null
+        if (uri == null || export == null) {
+            android.widget.Toast.makeText(this, "Output export cancelled", android.widget.Toast.LENGTH_SHORT).show()
+        } else exportCapturedOutput(uri, export)
     }
     private val lspConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -293,6 +316,8 @@ class MainActivity : ComponentActivity() {
                     retainedRun = latestRunSnapshot,
                     onSendInput = ::sendRunInput,
                     onCloseInput = ::closeRunInput,
+                    onExportStdout = { requestOutputExport(OutputStreamKind.Stdout) },
+                    onExportStderr = { requestOutputExport(OutputStreamKind.Stderr) },
                     onVerifyRuntime = ::verifyRuntime,
                     projects = repository.list().map { it.id },
                     projectFiles = repository.open(activeProjectId).sourceFiles,
@@ -1024,6 +1049,34 @@ class MainActivity : ComponentActivity() {
         latestRunSnapshot?.id?.let { jobService?.closeRunInput(it) }
             ?: InputOperationResult.Rejected("No active run")
 
+    private fun requestOutputExport(stream: OutputStreamKind) {
+        val capture = latestRunSnapshot?.capture(stream)
+        if (capture == null) {
+            android.widget.Toast.makeText(this, "No retained ${stream.label} is available", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        pendingOutputExport = PendingOutputExport(stream, capture)
+        outputExportPicker.launch("${activeProjectId}-${stream.label}.txt")
+    }
+
+    private fun exportCapturedOutput(uri: Uri, export: PendingOutputExport) {
+        thread(name = "run-output-export") {
+            val result = runCatching {
+                contentResolver.openOutputStream(uri, "w").use { output ->
+                    requireNotNull(output) { "The selected provider cannot be opened" }.write(export.capture.bytes())
+                }
+            }
+            if (result.isFailure) runCatching { DocumentsContract.deleteDocument(contentResolver, uri) }
+            runOnUiThread {
+                val message = result.fold(
+                    onSuccess = { "${export.stream.label.replaceFirstChar(Char::uppercase)} exported" },
+                    onFailure = { "Output export failed: ${it.message ?: it::class.java.simpleName}" },
+                )
+                android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private fun verifyRuntime(update: (EditorRunState) -> Unit) {
         thread(name = "lean-runtime-integrity") {
             val started = TimeSource.Monotonic.markNow()
@@ -1193,6 +1246,8 @@ private fun LeanEditorScreen(
     retainedRun: ProjectRunSnapshot?,
     onSendInput: (String, Boolean) -> InputOperationResult,
     onCloseInput: () -> InputOperationResult,
+    onExportStdout: () -> Unit,
+    onExportStderr: () -> Unit,
     onVerifyRuntime: ((EditorRunState) -> Unit) -> Unit,
     projects: List<String>,
     projectFiles: List<String>,
@@ -1558,6 +1613,8 @@ private fun LeanEditorScreen(
                         retainedRun = retainedRun,
                         onSendInput = onSendInput,
                         onCloseInput = onCloseInput,
+                        onExportStdout = onExportStdout,
+                        onExportStderr = onExportStderr,
                     searchVisible = searchVisible,
                     searchQuery = searchQuery,
                     canUndo = histories[editor.activePath]?.canUndo == true,
@@ -1992,7 +2049,10 @@ private fun LeanEditorScreen(
                             modifier = Modifier.semantics { contentDescription = "Close Output popup" },
                         ) { Text("Close") }
                     }
-                    OutputPanel(runState, Modifier.weight(1f), outputSnapshot, retainedRun, onSendInput, onCloseInput, onCancel)
+                    OutputPanel(
+                        runState, Modifier.weight(1f), outputSnapshot, retainedRun,
+                        onSendInput, onCloseInput, onCancel, onExportStdout, onExportStderr,
+                    )
                     if (running) TextButton(onClick = onCancel) { Text("Cancel") }
                 }
             }
@@ -2162,6 +2222,8 @@ private fun EditorContent(
     retainedRun: ProjectRunSnapshot?,
     onSendInput: (String, Boolean) -> InputOperationResult,
     onCloseInput: () -> InputOperationResult,
+    onExportStdout: () -> Unit,
+    onExportStderr: () -> Unit,
     searchVisible: Boolean,
     searchQuery: String,
     canUndo: Boolean,
@@ -2212,6 +2274,7 @@ private fun EditorContent(
                 if (outputPresentation == OutputPresentation.Docked) OutputPanel(
                     runState, textOverride = outputSnapshot, runSnapshot = retainedRun,
                     onSendInput = onSendInput, onCloseInput = onCloseInput, onCancel = onCancel,
+                    onExportStdout = onExportStdout, onExportStderr = onExportStderr,
                 )
             }
         }
@@ -2447,7 +2510,7 @@ private fun EditorContent(
             )
             if (paneVisible(outputCollapsed)) OutputPanel(
                 runState, Modifier.weight(outputFraction), outputSnapshot, retainedRun,
-                onSendInput, onCloseInput, onCancel,
+                onSendInput, onCloseInput, onCancel, onExportStdout, onExportStderr,
             )
         }
     }
@@ -2718,6 +2781,8 @@ private fun OutputPanel(
     onSendInput: (String, Boolean) -> InputOperationResult = { _, _ -> InputOperationResult.Rejected("Unavailable") },
     onCloseInput: () -> InputOperationResult = { InputOperationResult.Rejected("Unavailable") },
     onCancel: () -> Unit = {},
+    onExportStdout: () -> Unit = {},
+    onExportStderr: () -> Unit = {},
 ) {
     OutputPanel(
         state = state,
@@ -2730,6 +2795,8 @@ private fun OutputPanel(
         onSendInput = onSendInput,
         onCloseInput = onCloseInput,
         onCancel = onCancel,
+        onExportStdout = onExportStdout,
+        onExportStderr = onExportStderr,
     )
 }
 
@@ -2742,6 +2809,8 @@ private fun OutputPanel(
     onSendInput: (String, Boolean) -> InputOperationResult = { _, _ -> InputOperationResult.Rejected("Unavailable") },
     onCloseInput: () -> InputOperationResult = { InputOperationResult.Rejected("Unavailable") },
     onCancel: () -> Unit = {},
+    onExportStdout: () -> Unit = {},
+    onExportStderr: () -> Unit = {},
 ) {
     val style = LeanTheme.components.output
     val output = textOverride ?: formatRunState(state)
@@ -2780,6 +2849,12 @@ private fun OutputPanel(
         shape = style.shape,
     ) {
         Column {
+            if (runSnapshot?.capture(OutputStreamKind.Stdout) != null) {
+                Row(Modifier.padding(style.contentPadding)) {
+                    TextButton(onClick = onExportStdout) { Text("Export stdout") }
+                    TextButton(onClick = onExportStderr) { Text("Export stderr") }
+                }
+            }
             (runSnapshot?.input as? ProjectRunInput.ProjectFile)?.let { input ->
                 Text(
                     "Project input: ${input.relativePath} • ${input.expectedBytes} bytes" +
@@ -2877,6 +2952,8 @@ internal fun formatResult(result: ProcessResult, elapsed: Duration): String = bu
     val stdout = result.stdout.trimEnd()
     val stderr = result.stderr.trimEnd()
     if (stdout.isNotEmpty()) append("\n\nstdout:\n$stdout")
+    if (result.stdoutCapture.omittedBytes > 0) append("\n[stdout truncated; ${result.stdoutCapture.omittedBytes} bytes omitted]")
     if (stderr.isNotEmpty()) append("\n\nstderr:\n$stderr")
+    if (result.stderrCapture.omittedBytes > 0) append("\n[stderr truncated; ${result.stderrCapture.omittedBytes} bytes omitted]")
     if (stdout.isEmpty() && stderr.isEmpty()) append("\n\nLean produced no output.")
 }

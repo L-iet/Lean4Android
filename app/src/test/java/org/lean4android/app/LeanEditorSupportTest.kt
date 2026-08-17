@@ -7,6 +7,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.lean4android.process.ProcessResult
+import org.lean4android.process.CapturedOutput
 import kotlin.time.Duration.Companion.milliseconds
 
 class LeanEditorSupportTest {
@@ -50,6 +51,21 @@ class LeanEditorSupportTest {
 
         assertTrue(output.contains("Exit: -1 (timed out)"))
         assertTrue(output.contains("Lean produced no output."))
+    }
+
+    @Test
+    fun `result formatting discloses independent stream truncation`() {
+        val output = formatResult(
+            ProcessResult(
+                0, "out", "err", false,
+                CapturedOutput.fromBytes("out".toByteArray(), omittedBytes = 7),
+                CapturedOutput.fromBytes("err".toByteArray(), omittedBytes = 11),
+            ),
+            1.milliseconds,
+        )
+
+        assertTrue(output.contains("stdout truncated; 7 bytes omitted"))
+        assertTrue(output.contains("stderr truncated; 11 bytes omitted"))
     }
 
     @Test

@@ -21,6 +21,21 @@ class ProcessJobSupervisorTest {
         assertEquals(2, result.exitCode)
         assertEquals("12345", result.stdout)
         assertEquals("warni", result.stderr)
+        assertTrue(result.stdoutCapture.bytes().contentEquals("12345".toByteArray()))
+        assertEquals(4, result.stdoutCapture.omittedBytes)
+        assertEquals(2, result.stderrCapture.omittedBytes)
+    }
+
+    @Test fun retainedCapturePreservesInvalidUtf8BytesIndependentlyOfDisplayText() {
+        val raw = byteArrayOf('a'.code.toByte(), 0xC3.toByte(), 0x28)
+        val process = FakeRunningProcess("", "", exit = 0, stdoutInput = ByteArrayInputStream(raw))
+        val job = ProcessJobSupervisor(command(), ProcessLauncher { process })
+
+        awaitStopped(job)
+
+        val result = (job.state as ProcessJobState.Completed).result
+        assertTrue(result.stdout.contains('\uFFFD'))
+        assertTrue(result.stdoutCapture.bytes().contentEquals(raw))
     }
 
     @Test fun cancellationTerminatesOwnedProcess() {

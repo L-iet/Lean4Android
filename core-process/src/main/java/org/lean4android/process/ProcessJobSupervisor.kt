@@ -11,7 +11,12 @@ sealed interface ProcessJobState {
     data object Running : ProcessJobState
     data class Completed(val result: ProcessResult) : ProcessJobState
     data class Failed(val message: String) : ProcessJobState
-    data class Cancelled(val stdout: String, val stderr: String) : ProcessJobState
+    data class Cancelled(
+        val stdout: String,
+        val stderr: String,
+        val stdoutCapture: CapturedOutput = CapturedOutput.fromUtf8(stdout),
+        val stderrCapture: CapturedOutput = CapturedOutput.fromUtf8(stderr),
+    ) : ProcessJobState
 }
 
 sealed interface StdinPlan {
@@ -94,9 +99,15 @@ class ProcessJobSupervisor(
             inputThread.join()
             stdoutThread.join()
             stderrThread.join()
-            if (cancelled.get()) ProcessJobState.Cancelled(stdout.text(), stderr.text())
+            val stdoutCapture = stdout.capture()
+            val stderrCapture = stderr.capture()
+            if (cancelled.get()) ProcessJobState.Cancelled(
+                stdoutCapture.text(), stderrCapture.text(), stdoutCapture, stderrCapture,
+            )
             else drainFailure.get()?.let { ProcessJobState.Failed("Could not read process output: $it") }
-                ?: ProcessJobState.Completed(ProcessResult(exit, stdout.text(), stderr.text(), false))
+                ?: ProcessJobState.Completed(ProcessResult(
+                    exit, stdoutCapture.text(), stderrCapture.text(), false, stdoutCapture, stderrCapture,
+                ))
         }.getOrElse { ProcessJobState.Failed(it.message ?: it::class.java.simpleName) }
             .also(::publish)
     }
@@ -254,9 +265,12 @@ class ProcessJobSupervisor(
 
 private class BoundedOutput(private val limit: Int) {
     private val bytes = java.io.ByteArrayOutputStream()
+    private var omittedBytes = 0L
     @Synchronized fun append(buffer: ByteArray, count: Int) {
         val remaining = limit - bytes.size()
-        if (remaining > 0) bytes.write(buffer, 0, minOf(count, remaining))
+        val retained = minOf(count, maxOf(remaining, 0))
+        if (retained > 0) bytes.write(buffer, 0, retained)
+        omittedBytes += count - retained
     }
-    @Synchronized fun text(): String = bytes.toString(Charsets.UTF_8.name())
+    @Synchronized fun capture(): CapturedOutput = CapturedOutput.fromBytes(bytes.toByteArray(), omittedBytes)
 }

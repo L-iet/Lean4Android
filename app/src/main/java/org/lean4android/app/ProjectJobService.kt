@@ -11,6 +11,7 @@ import org.lean4android.process.ProcessJobState
 import org.lean4android.process.ProcessJobSupervisor
 import org.lean4android.process.StdinPlan
 import org.lean4android.process.InputOperationResult
+import org.lean4android.process.CapturedOutput
 import java.util.concurrent.CopyOnWriteArraySet
 
 enum class ProjectRunPhase { Build, Program }
@@ -243,7 +244,14 @@ internal fun combineProjectRunResult(
     build: org.lean4android.process.ProcessResult,
     program: org.lean4android.process.ProcessResult,
     entry: String,
-) = program.copy(
-    stdout = build.stdout + "\nBuild completed; running $entry\n" + program.stdout,
-    stderr = build.stderr + program.stderr,
-)
+): org.lean4android.process.ProcessResult {
+    val marker = CapturedOutput.fromUtf8("\nBuild completed; running $entry\n")
+    val stdout = CapturedOutput.concatenate(build.stdoutCapture, marker, program.stdoutCapture)
+    val stderr = CapturedOutput.concatenate(build.stderrCapture, program.stderrCapture)
+    return program.copy(
+        stdout = stdout.text(),
+        stderr = stderr.text(),
+        stdoutCapture = stdout,
+        stderrCapture = stderr,
+    )
+}

@@ -6,6 +6,7 @@ import org.junit.Test
 import org.lean4android.process.InputByteSource
 import org.lean4android.process.ProcessResult
 import org.lean4android.process.StdinPlan
+import org.lean4android.process.CapturedOutput
 import java.io.ByteArrayInputStream
 
 class ProjectRunSequenceTest {
@@ -29,6 +30,28 @@ class ProjectRunSequenceTest {
         closeRunStdinPlan(StdinPlan.Bytes(source))
 
         assertTrue(source.closed)
+    }
+
+    @Test fun `combined run preserves byte captures and truncation accounting`() {
+        val build = ProcessResult(
+            0, "build", "warn", false,
+            CapturedOutput.fromBytes(byteArrayOf(0xC3.toByte()), omittedBytes = 2),
+            CapturedOutput.fromUtf8("warn"),
+        )
+        val program = ProcessResult(
+            0, "program", "error", false,
+            CapturedOutput.fromUtf8("program"),
+            CapturedOutput.fromBytes(byteArrayOf(0xFF.toByte()), omittedBytes = 3),
+        )
+
+        val combined = combineProjectRunResult(build, program, "Main.lean")
+
+        assertEquals(2, combined.stdoutCapture.omittedBytes)
+        assertEquals(3, combined.stderrCapture.omittedBytes)
+        assertTrue(combined.stdoutCapture.bytes().contentEquals(
+            byteArrayOf(0xC3.toByte()) + "\nBuild completed; running Main.lean\nprogram".toByteArray(),
+        ))
+        assertTrue(combined.stderrCapture.bytes().contentEquals("warn".toByteArray() + byteArrayOf(0xFF.toByte())))
     }
 
     @Test fun `saved-version project input is excluded from pre-run saves`() {
