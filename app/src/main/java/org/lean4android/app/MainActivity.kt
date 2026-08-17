@@ -106,7 +106,7 @@ import org.lean4android.process.JvmCommandRunner
 import org.lean4android.process.JvmProcessLauncher
 import org.lean4android.process.ProcessResult
 import org.lean4android.process.ProcessJobState
-import org.lean4android.process.ProcessJobSupervisor
+import org.lean4android.process.ProcessJobSnapshot
 import org.lean4android.project.LeanProjectRepository
 import org.lean4android.toolchain.AndroidToolchainLocator
 import org.lean4android.toolchain.ToolchainCommandFactory
@@ -158,7 +158,7 @@ class MainActivity : ComponentActivity() {
     private val lspSyncRunnable = Runnable { syncLspDocuments() }
     private val goalRequestRunnables = mutableMapOf<String, Runnable>()
     private var automaticLspRestartAttempts = 0
-    @Volatile private var activeJob: ProcessJobSupervisor? = null
+    private var activeRunChain: ActiveRunChain? = null
     private val archivePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { importArchive(it) }
     }
@@ -212,7 +212,10 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val jobListener = ProjectJobService.Listener { snapshot ->
-        runOnUiThread { jobSnapshots = jobSnapshots + (snapshot.id to snapshot) }
+        runOnUiThread {
+            jobSnapshots = jobSnapshots + (snapshot.id to snapshot)
+            handleRunSnapshot(snapshot)
+        }
     }
     private val jobConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -363,8 +366,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        activeJob?.close()
-        activeJob = null
         super.onDestroy()
     }
 
@@ -959,38 +960,56 @@ class MainActivity : ComponentActivity() {
         started: kotlin.time.TimeMark,
         update: (EditorRunState) -> Unit,
     ) {
-        activeJob?.close()
-        activeJob = ProcessJobSupervisor(buildCommand, JvmProcessLauncher()) { buildState ->
-            when (buildState) {
-                is ProcessJobState.Completed -> if (buildState.result.exitCode == 0) {
-                    val build = buildState.result
-                    activeJob = ProcessJobSupervisor(runCommand, JvmProcessLauncher()) { runState ->
-                        val final = when (runState) {
-                            is ProcessJobState.Completed -> EditorRunState.Finished(
-                                runState.result.copy(
-                                    stdout = build.stdout + "\nBuild completed; running $entry\n" + runState.result.stdout,
-                                    stderr = build.stderr + runState.result.stderr,
-                                ), started.elapsedNow(),
-                            )
-                            is ProcessJobState.Cancelled -> EditorRunState.Cancelled
-                            is ProcessJobState.Failed -> EditorRunState.Failed(runState.message)
-                            ProcessJobState.Running -> return@ProcessJobSupervisor
-                        }
-                        activeJob = null
-                        runOnUiThread { update(final) }
-                    }
+        val service = jobService
+        if (service == null) {
+            update(EditorRunState.Failed("Run service is not connected"))
+            return
+        }
+        activeRunChain?.activeJobId?.let(service::cancel)
+        val build = service.start(buildCommand)
+        activeRunChain = ActiveRunChain(build.id, runCommand, entry, started, update)
+        handleRunSnapshot(build)
+    }
+
+    private fun handleRunSnapshot(snapshot: ProcessJobSnapshot) {
+        val chain = activeRunChain ?: return
+        if (snapshot.id != chain.activeJobId || snapshot.state == ProcessJobState.Running) return
+        when (val state = snapshot.state) {
+            is ProcessJobState.Completed -> if (chain.buildResult == null && state.result.exitCode == 0) {
+                val service = jobService
+                if (service == null) {
+                    finishRunChain(chain, EditorRunState.Failed("Run service disconnected after build"))
                 } else {
-                    activeJob = null
-                    runOnUiThread { update(EditorRunState.Finished(buildState.result, started.elapsedNow())) }
+                    chain.buildResult = state.result
+                    val run = service.start(chain.runCommand)
+                    chain.activeJobId = run.id
+                    handleRunSnapshot(run)
                 }
-                is ProcessJobState.Cancelled -> { activeJob = null; runOnUiThread { update(EditorRunState.Cancelled) } }
-                is ProcessJobState.Failed -> { activeJob = null; runOnUiThread { update(EditorRunState.Failed(buildState.message)) } }
-                ProcessJobState.Running -> Unit
+            } else if (chain.buildResult == null) {
+                finishRunChain(chain, EditorRunState.Finished(state.result, chain.started.elapsedNow()))
+            } else {
+                val build = requireNotNull(chain.buildResult)
+                finishRunChain(chain, EditorRunState.Finished(
+                    state.result.copy(
+                        stdout = build.stdout + "\nBuild completed; running ${chain.entry}\n" + state.result.stdout,
+                        stderr = build.stderr + state.result.stderr,
+                    ),
+                    chain.started.elapsedNow(),
+                ))
             }
+            is ProcessJobState.Cancelled -> finishRunChain(chain, EditorRunState.Cancelled)
+            is ProcessJobState.Failed -> finishRunChain(chain, EditorRunState.Failed(state.message))
+            ProcessJobState.Running -> Unit
         }
     }
 
-    private fun cancelRun() { activeJob?.cancel() }
+    private fun finishRunChain(chain: ActiveRunChain, state: EditorRunState) {
+        if (activeRunChain !== chain) return
+        activeRunChain = null
+        chain.update(state)
+    }
+
+    private fun cancelRun() { activeRunChain?.activeJobId?.let { jobService?.cancel(it) } }
 
     private fun verifyRuntime(update: (EditorRunState) -> Unit) {
         thread(name = "lean-runtime-integrity") {
@@ -1024,6 +1043,15 @@ private sealed interface EditorRunState {
     data class IntegrityFinished(val problems: List<String>, val elapsed: Duration) : EditorRunState
     data class Failed(val message: String) : EditorRunState
 }
+
+private data class ActiveRunChain(
+    var activeJobId: Long,
+    val runCommand: org.lean4android.process.ProcessCommand,
+    val entry: String,
+    val started: kotlin.time.TimeMark,
+    val update: (EditorRunState) -> Unit,
+    var buildResult: ProcessResult? = null,
+)
 
 private data class LspUiState(
     val status: String = "Disconnected",
