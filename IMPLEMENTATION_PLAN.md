@@ -472,6 +472,8 @@ Implement these in the listed priority order after the focused M5 Mathlib compat
 - In Popup mode, Output remains absent from the normal editor split and opens automatically only in response to Build project or Run/Play. Keep a direct way to dismiss and reopen the current bounded output without restarting the job; Back/Escape, cancellation, Activity recreation, and repeated runs must have deterministic behavior.
 - Preserve bounded chronological output, progress/error states, selection/copy, cancellation, pane-size memory for later Docked use, accessibility, compact/tablet layouts, and exact child-process cleanup in both modes. Do not implement this as a system overlay, WebView, or second Activity unless a later design review establishes a concrete need.
 
+Completed (2026-08-16): Settings persists Docked/Popup; Play and drawer Build reveal the selected presentation; More → Show Output reopens the current bounded result; Popup is an in-app dismissible dialog and Docked preserves its fraction/IME behavior. Host tests and the API-33 tablet proved Popup execution, dismiss/reopen, completed-result recreation, Docked collapsed-to-revealed execution, Ready Goals, preference restoration, and exact no-orphan cleanup.
+
 #### Priority 2 — Automatic inline LSP completion
 
 - Stop presenting completion candidates as Goals-panel text. When completion is enabled, request candidates automatically from the retained LSP session as the user types, using bounded debounce, document version/generation checks, cancellation, and stale-response rejection.

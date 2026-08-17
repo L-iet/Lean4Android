@@ -233,6 +233,9 @@ class MainActivity : ComponentActivity() {
             var outputFraction by remember {
                 mutableStateOf(clampPaneFraction(getPreferences(MODE_PRIVATE).getFloat("outputFraction", 0.24f)))
             }
+            var outputPresentation by remember {
+                mutableStateOf(OutputPresentation.fromPreference(getPreferences(MODE_PRIVATE).getString("outputPresentation", null)))
+            }
             Lean4AndroidTheme(darkTheme = darkTheme) {
                 LeanEditorScreen(
                     initialState = editorState,
@@ -290,6 +293,11 @@ class MainActivity : ComponentActivity() {
                     onOutputFractionChanged = { fraction ->
                         outputFraction = clampPaneFraction(fraction)
                         getPreferences(MODE_PRIVATE).edit().putFloat("outputFraction", outputFraction).apply()
+                    },
+                    outputPresentation = outputPresentation,
+                    onOutputPresentationChanged = { presentation ->
+                        outputPresentation = presentation
+                        getPreferences(MODE_PRIVATE).edit().putString("outputPresentation", presentation.preferenceValue).apply()
                     },
                 )
             }
@@ -1115,9 +1123,12 @@ private fun LeanEditorScreen(
     onBottomGoalsFractionChanged: (Float) -> Unit,
     outputFraction: Float,
     onOutputFractionChanged: (Float) -> Unit,
+    outputPresentation: OutputPresentation,
+    onOutputPresentationChanged: (OutputPresentation) -> Unit,
 ) {
     var editor by remember { mutableStateOf(initialState) }
     var runState by remember { mutableStateOf<EditorRunState>(EditorRunState.Idle) }
+    var outputSnapshot by rememberSaveable { mutableStateOf(formatRunState(EditorRunState.Idle)) }
     var fileAction by remember { mutableStateOf<String?>(null) }
     var requestedPath by remember { mutableStateOf("") }
     var searchVisible by remember { mutableStateOf(false) }
@@ -1129,6 +1140,7 @@ private fun LeanEditorScreen(
     var goalsCollapsed by rememberSaveable { mutableStateOf(false) }
     var messagesCollapsed by rememberSaveable { mutableStateOf(false) }
     var outputCollapsed by rememberSaveable { mutableStateOf(false) }
+    var outputPopupVisible by rememberSaveable { mutableStateOf(false) }
     var openWorkspace by remember { mutableStateOf(false) }
     var newProjectDialog by rememberSaveable { mutableStateOf(false) }
     var newProjectName by rememberSaveable { mutableStateOf("") }
@@ -1159,11 +1171,14 @@ private fun LeanEditorScreen(
         }.distinct())
     }
     val running = runState == EditorRunState.Running
-    BackHandler(enabled = filesMenu || moreMenu || drawerOpen || openWorkspace || settingsPage != null) {
+    BackHandler(enabled = outputPopupVisible || filesMenu || moreMenu || drawerOpen || openWorkspace || settingsPage != null) {
         when (settingsPage) {
-            "appearance", "editor" -> settingsPage = "settings"
+            "appearance", "editor", "interface" -> settingsPage = "settings"
             "settings" -> settingsPage = null
-            else -> { filesMenu = false; moreMenu = false; drawerOpen = false; openWorkspace = false }
+            else -> {
+                if (outputPopupVisible) outputPopupVisible = false
+                else { filesMenu = false; moreMenu = false; drawerOpen = false; openWorkspace = false }
+            }
         }
     }
 
@@ -1218,9 +1233,15 @@ private fun LeanEditorScreen(
 
     fun buildProject() {
         if (running) return
+        revealOutput(outputPresentation, outputCollapsed).also { reveal ->
+            outputCollapsed = reveal.dockedCollapsed
+            outputPopupVisible = reveal.popupVisible
+        }
         runState = EditorRunState.Running
+        outputSnapshot = formatRunState(runState)
         onCheck(editor.tabs.associate { it.path to it.contents }) { result ->
             runState = result
+            outputSnapshot = formatRunState(result)
             if (result is EditorRunState.Finished) publish(editor.markSaved())
         }
     }
@@ -1290,6 +1311,13 @@ private fun LeanEditorScreen(
                             DropdownMenuItem(text = { Text("≡  Complete") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.Completion) })
                             DropdownMenuItem(text = { Text("→  Go to definition") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.Definition) })
                             DropdownMenuItem(text = { Text("↔  Find references") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.References) })
+                            DropdownMenuItem(text = { Text("▤  Show Output") }, onClick = {
+                                moreMenu = false
+                                revealOutput(outputPresentation, outputCollapsed).also { reveal ->
+                                    outputCollapsed = reveal.dockedCollapsed
+                                    outputPopupVisible = reveal.popupVisible
+                                }
+                            })
                         }
                     }
                 },
@@ -1331,6 +1359,7 @@ private fun LeanEditorScreen(
                     value = editor.activePath?.let(fieldValues::getValue) ?: TextFieldValue(),
                     running = running,
                     runState = runState,
+                    outputSnapshot = outputSnapshot,
                     searchVisible = searchVisible,
                     searchQuery = searchQuery,
                     canUndo = histories[editor.activePath]?.canUndo == true,
@@ -1345,7 +1374,11 @@ private fun LeanEditorScreen(
                     onRedo = ::redo,
                     onBuild = ::buildProject,
                     onCancel = onCancel,
-                    onVerify = { runState = EditorRunState.Running; onVerifyRuntime { runState = it } },
+                    onVerify = {
+                        runState = EditorRunState.Running
+                        outputSnapshot = formatRunState(runState)
+                        onVerifyRuntime { result -> runState = result; outputSnapshot = formatRunState(result) }
+                    },
                     onSelectTab = { publish(editor.select(it)) },
                     onRenameTab = { path ->
                         renameEntryTarget = path; lifecycleName = path; lifecycleError = null
@@ -1357,6 +1390,7 @@ private fun LeanEditorScreen(
                     hoverEnabled = lspUiState.status == "Ready",
                     outputFraction = outputFraction,
                     outputCollapsed = outputCollapsed,
+                    outputPresentation = outputPresentation,
                     messagesCollapsed = messagesCollapsed,
                     dockedImeVisible = dockedImeVisible,
                     onOutputCollapsedChanged = { outputCollapsed = it },
@@ -1445,7 +1479,12 @@ private fun LeanEditorScreen(
                             verticalArrangement = Arrangement.spacedBy(dimensions.compactSpacing),
                         ) {
                             TextButton(enabled = !running, onClick = { drawerOpen = false; buildProject() }) { Text("Build project") }
-                            TextButton(enabled = !running, onClick = { drawerOpen = false; runState = EditorRunState.Running; onVerifyRuntime { runState = it } }) { Text("Verify runtime") }
+                            TextButton(enabled = !running, onClick = {
+                                drawerOpen = false
+                                runState = EditorRunState.Running
+                                outputSnapshot = formatRunState(runState)
+                                onVerifyRuntime { result -> runState = result; outputSnapshot = formatRunState(result) }
+                            }) { Text("Verify runtime") }
                             TextButton(onClick = { drawerOpen = false; onRestartLsp() }) { Text("Restart Lean server") }
                             TextButton(
                                 enabled = !running,
@@ -1629,7 +1668,7 @@ private fun LeanEditorScreen(
                 Column(Modifier.fillMaxSize().padding(dimensions.screenPadding), verticalArrangement = Arrangement.spacedBy(dimensions.sectionSpacing)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = { settingsPage = if (page == "settings") null else "settings" }) { Text("Back") }
-                        Text(when (page) { "appearance" -> "Appearance"; "editor" -> "Editor"; else -> "Settings" }, style = shellStyle.screenHeadingStyle)
+                        Text(when (page) { "appearance" -> "Appearance"; "editor" -> "Editor"; "interface" -> "Interface"; else -> "Settings" }, style = shellStyle.screenHeadingStyle)
                     }
                     if (page == "settings") {
                         TextButton(
@@ -1640,6 +1679,10 @@ private fun LeanEditorScreen(
                             modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Open Editor settings" },
                             onClick = { settingsPage = "editor" },
                         ) { Text("Editor") }
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Open Interface settings" },
+                            onClick = { settingsPage = "interface" },
+                        ) { Text("Interface") }
                     } else if (page == "appearance") {
                         Row(
                             Modifier.fillMaxWidth().clickable { onDarkThemeChanged(!darkTheme) }.padding(vertical = dimensions.settingsRowPadding),
@@ -1653,7 +1696,7 @@ private fun LeanEditorScreen(
                                 modifier = Modifier.semantics { contentDescription = "Dark theme" },
                             )
                         }
-                    } else {
+                    } else if (page == "editor") {
                         Text("Goals pane position", style = MaterialTheme.typography.titleMedium)
                         listOf(
                             GoalsPanePosition.Auto to "Auto",
@@ -1676,7 +1719,60 @@ private fun LeanEditorScreen(
                                 }
                             }
                         }
+                    } else {
+                        Text("Output presentation", style = MaterialTheme.typography.titleMedium)
+                        OutputPresentation.entries.forEach { presentation ->
+                            val label = if (presentation == OutputPresentation.Docked) "Docked" else "Popup"
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .clickable {
+                                        onOutputPresentationChanged(presentation)
+                                        if (presentation == OutputPresentation.Popup) outputCollapsed = false
+                                        outputPopupVisible = false
+                                    }
+                                    .padding(vertical = dimensions.settingsRowPadding)
+                                    .semantics { contentDescription = "Output presentation: $label" },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = outputPresentation == presentation,
+                                    onClick = {
+                                        onOutputPresentationChanged(presentation)
+                                        if (presentation == OutputPresentation.Popup) outputCollapsed = false
+                                        outputPopupVisible = false
+                                    },
+                                )
+                                Column {
+                                    Text(label)
+                                    Text(
+                                        if (presentation == OutputPresentation.Docked) "Show Output below the editor" else "Open Output over the workspace",
+                                        style = shellStyle.supportingStyle,
+                                    )
+                                }
+                            }
+                        }
                     }
+                }
+            }
+        }
+    }
+
+    if (outputPopupVisible && outputPresentation == OutputPresentation.Popup) {
+        Dialog(onDismissRequest = { outputPopupVisible = false }) {
+            Surface(
+                Modifier.fillMaxWidth().fillMaxHeight(0.72f),
+                shape = LeanTheme.components.output.shape,
+            ) {
+                Column(Modifier.fillMaxSize().padding(LeanTheme.dimensions.standardSpacing)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Output", style = MaterialTheme.typography.titleLarge)
+                        TextButton(
+                            onClick = { outputPopupVisible = false },
+                            modifier = Modifier.semantics { contentDescription = "Close Output popup" },
+                        ) { Text("Close") }
+                    }
+                    OutputPanel(runState, Modifier.weight(1f), outputSnapshot)
+                    if (running) TextButton(onClick = onCancel) { Text("Cancel") }
                 }
             }
         }
@@ -1841,6 +1937,7 @@ private fun EditorContent(
     value: TextFieldValue,
     running: Boolean,
     runState: EditorRunState,
+    outputSnapshot: String,
     searchVisible: Boolean,
     searchQuery: String,
     canUndo: Boolean,
@@ -1865,6 +1962,7 @@ private fun EditorContent(
     hoverEnabled: Boolean,
     outputFraction: Float,
     outputCollapsed: Boolean,
+    outputPresentation: OutputPresentation,
     messagesCollapsed: Boolean,
     dockedImeVisible: Boolean,
     onOutputCollapsedChanged: (Boolean) -> Unit,
@@ -1883,7 +1981,7 @@ private fun EditorContent(
             Column(Modifier.padding(dimensions.screenPadding), verticalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
                 Text("No file open", style = MaterialTheme.typography.titleMedium)
                 Text("Use Files → New or Open, or choose a file from the Project drawer.")
-                OutputPanel(runState)
+                if (outputPresentation == OutputPresentation.Docked) OutputPanel(runState, textOverride = outputSnapshot)
             }
         }
         return
@@ -2008,7 +2106,7 @@ private fun EditorContent(
                 }
             }
         }
-        if (!dockedImeVisible) {
+        if (outputPresentation == OutputPresentation.Docked && !dockedImeVisible) {
             PaneSplitter(
                 vertical = false,
                 paneName = "Output panel",
@@ -2018,7 +2116,7 @@ private fun EditorContent(
                 onDrag = onOutputDrag,
                 onStep = onOutputStep,
             )
-            if (paneVisible(outputCollapsed)) OutputPanel(runState, Modifier.weight(outputFraction))
+            if (paneVisible(outputCollapsed)) OutputPanel(runState, Modifier.weight(outputFraction), outputSnapshot)
         }
     }
 }
@@ -2285,27 +2383,21 @@ private fun ProjectOpenRow(id: String, onOpen: () -> Unit, onRename: () -> Unit,
 internal fun editorLineNumbers(text: String): String = (1..(text.count { it == '\n' } + 1)).joinToString("\n")
 
 @Composable
-private fun OutputPanel(state: EditorRunState) {
+private fun OutputPanel(state: EditorRunState, textOverride: String? = null) {
     OutputPanel(
         state = state,
         modifier = Modifier.heightIn(
             min = LeanTheme.dimensions.outputMinHeight,
             max = LeanTheme.dimensions.outputMaxHeight,
         ),
+        textOverride = textOverride,
     )
 }
 
 @Composable
-private fun OutputPanel(state: EditorRunState, modifier: Modifier) {
+private fun OutputPanel(state: EditorRunState, modifier: Modifier, textOverride: String? = null) {
     val style = LeanTheme.components.output
-    val output = when (state) {
-        EditorRunState.Idle -> "Edit the source, then use Run or the Project drawer actions."
-        EditorRunState.Running -> "Working…"
-        EditorRunState.Cancelled -> "Run cancelled."
-        is EditorRunState.Failed -> "Could not run Lean:\n${state.message}"
-        is EditorRunState.Finished -> formatResult(state.result, state.elapsed)
-        is EditorRunState.IntegrityFinished -> formatIntegrityResult(state.problems, state.elapsed)
-    }
+    val output = textOverride ?: formatRunState(state)
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -2324,6 +2416,15 @@ private fun OutputPanel(state: EditorRunState, modifier: Modifier) {
             )
         }
     }
+}
+
+private fun formatRunState(state: EditorRunState): String = when (state) {
+    EditorRunState.Idle -> "Edit the source, then use Run or the Project drawer actions."
+    EditorRunState.Running -> "Working…"
+    EditorRunState.Cancelled -> "Run cancelled."
+    is EditorRunState.Failed -> "Could not run Lean:\n${state.message}"
+    is EditorRunState.Finished -> formatResult(state.result, state.elapsed)
+    is EditorRunState.IntegrityFinished -> formatIntegrityResult(state.problems, state.elapsed)
 }
 
 internal fun formatIntegrityResult(problems: List<String>, elapsed: Duration): String = buildString {
