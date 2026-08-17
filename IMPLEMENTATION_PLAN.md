@@ -483,6 +483,8 @@ Completed (2026-08-16): Settings persists Docked/Popup; Play and drawer Build re
 
 Exit: Build and Run always reveal Output according to the selected Docked/Popup mode without affecting Messages or Goals, and enabled LSP completions appear at the caret and can be inserted safely instead of being printed in Goals.
 
+Completed (2026-08-16): automatic completion is enabled by default behind a persistent Settings → Editor switch, debounced against the synchronized Ready LSP document, and capped at five retained/visible suggestions. List and CompletionList responses, plain insertion, text edits, safe snippet fallback, stale generation/version/path/position rejection, caret-adjacent touch/keyboard selection, and single-history-edit insertion are implemented. Host regression and API-33 physical typing/insertion/IME acceptance passed; completion text is no longer shown in Goals.
+
 ### M5.1 — General project files and program streams
 
 The detailed process, buffering, lifecycle, UI, security, and validation design is recorded in [`docs/project/STDIN_SUPPORT.md`](docs/project/STDIN_SUPPORT.md).

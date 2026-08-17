@@ -72,6 +72,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
@@ -90,9 +91,12 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.delay
 import org.lean4android.model.ToolchainHealth
 import org.lean4android.lsp.DiagnosticBatch
 import org.lean4android.lsp.JsonRpcEnvelope
@@ -145,6 +149,7 @@ class MainActivity : ComponentActivity() {
     private val nextLspRequestId = AtomicLong(10L)
     private val pendingLspRequests = ConcurrentHashMap<Long, PendingLspRequest>()
     private val latestGoalPositions = ConcurrentHashMap<String, LspPosition>()
+    private val latestCompletionPositions = ConcurrentHashMap<String, LspPosition>()
     private val leanRpcSessions = ConcurrentHashMap<String, Long>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lspSyncRunnable = Runnable { syncLspDocuments() }
@@ -236,6 +241,9 @@ class MainActivity : ComponentActivity() {
             var outputPresentation by remember {
                 mutableStateOf(OutputPresentation.fromPreference(getPreferences(MODE_PRIVATE).getString("outputPresentation", null)))
             }
+            var completionsEnabled by remember {
+                mutableStateOf(getPreferences(MODE_PRIVATE).getBoolean("completionsEnabled", true))
+            }
             Lean4AndroidTheme(darkTheme = darkTheme) {
                 LeanEditorScreen(
                     initialState = editorState,
@@ -273,6 +281,8 @@ class MainActivity : ComponentActivity() {
                     lspUiState = lspUiState,
                     onCursorChanged = ::requestGoals,
                     onLspAction = ::requestLspFeature,
+                    onRequestCompletion = ::requestCompletion,
+                    onDismissCompletion = ::dismissCompletion,
                     onRestartLsp = ::restartLsp,
                     goalsPanePosition = goalsPanePosition,
                     onGoalsPanePositionChanged = { position ->
@@ -298,6 +308,12 @@ class MainActivity : ComponentActivity() {
                     onOutputPresentationChanged = { presentation ->
                         outputPresentation = presentation
                         getPreferences(MODE_PRIVATE).edit().putString("outputPresentation", presentation.preferenceValue).apply()
+                    },
+                    completionsEnabled = completionsEnabled,
+                    onCompletionsEnabledChanged = { enabled ->
+                        completionsEnabled = enabled
+                        getPreferences(MODE_PRIVATE).edit().putBoolean("completionsEnabled", enabled).apply()
+                        if (!enabled) dismissCompletion()
                     },
                 )
             }
@@ -517,16 +533,12 @@ class MainActivity : ComponentActivity() {
                     hover = jsonDisplayText(response.result).ifBlank { "No hover information" },
                 )
                 LspRequestKind.Completion -> {
-                    val result = response.result
-                    val values = when (result) {
-                        is JsonValue.ArrayValue -> result.values
-                        is JsonValue.ObjectValue -> (result.fields["items"] as? JsonValue.ArrayValue)?.values.orEmpty()
-                        else -> emptyList()
-                    }
-                    val labels = values.mapNotNull { value ->
-                        ((value as? JsonValue.ObjectValue)?.fields?.get("label") as? JsonValue.StringValue)?.value
-                    }.take(100)
-                    lspUiState = lspUiState.copy(completions = labels)
+                    if (latestCompletionPositions[pending.path] != pending.position) return@runOnUiThread
+                    lspUiState = lspUiState.copy(
+                        completions = parseCompletionCandidates(response.result),
+                        completionPath = pending.path,
+                        completionPosition = pending.position,
+                    )
                 }
                 LspRequestKind.Definition -> {
                     val location = firstLocation(response.result)
@@ -575,6 +587,20 @@ class MainActivity : ComponentActivity() {
             project.directory.resolve(tab.path).toURI().toString() to tab.contents
         }
         runCatching { service.synchronizeDocuments(activeProjectId, generation, buffers) }
+    }
+
+    private fun requestCompletion(path: String, text: String, offset: Int) {
+        val position = lspPositionAt(text, offset)
+        latestCompletionPositions[path] = position
+        lspUiState = lspUiState.copy(completions = emptyList(), completionPath = path, completionPosition = position)
+        syncLspDocuments()
+        requestLspFeature(path, text, offset, LspRequestKind.Completion)
+    }
+
+    private fun dismissCompletion() {
+        latestCompletionPositions.clear()
+        pendingLspRequests.entries.removeIf { (_, pending) -> pending.kind == LspRequestKind.Completion }
+        lspUiState = lspUiState.copy(completions = emptyList(), completionPath = null, completionPosition = null)
     }
 
     private fun scheduleLspSync() {
@@ -978,7 +1004,9 @@ private data class LspUiState(
     val goals: Map<String, String> = emptyMap(),
     val termGoals: Map<String, String> = emptyMap(),
     val hover: String = "",
-    val completions: List<String> = emptyList(),
+    val completions: List<CompletionCandidate> = emptyList(),
+    val completionPath: String? = null,
+    val completionPosition: LspPosition? = null,
     val definition: DefinitionTarget? = null,
     val navigationMessage: String = "",
     val references: List<String> = emptyList(),
@@ -1114,6 +1142,8 @@ private fun LeanEditorScreen(
     lspUiState: LspUiState,
     onCursorChanged: (String, String, Int) -> Unit,
     onLspAction: (String, String, Int, LspRequestKind) -> Unit,
+    onRequestCompletion: (String, String, Int) -> Unit,
+    onDismissCompletion: () -> Unit,
     onRestartLsp: () -> Unit,
     goalsPanePosition: GoalsPanePosition,
     onGoalsPanePositionChanged: (GoalsPanePosition) -> Unit,
@@ -1125,6 +1155,8 @@ private fun LeanEditorScreen(
     onOutputFractionChanged: (Float) -> Unit,
     outputPresentation: OutputPresentation,
     onOutputPresentationChanged: (OutputPresentation) -> Unit,
+    completionsEnabled: Boolean,
+    onCompletionsEnabledChanged: (Boolean) -> Unit,
 ) {
     var editor by remember { mutableStateOf(initialState) }
     var runState by remember { mutableStateOf<EditorRunState>(EditorRunState.Idle) }
@@ -1308,7 +1340,6 @@ private fun LeanEditorScreen(
                             DropdownMenuItem(text = { Text("↷  Redo") }, enabled = histories[editor.activePath]?.canRedo == true, onClick = { moreMenu = false; redo() })
                             DropdownMenuItem(text = { Text("⌕  Find") }, enabled = editor.activePath != null, onClick = { moreMenu = false; searchVisible = true })
                             DropdownMenuItem(text = { Text("ⓘ  Hover") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.Hover) })
-                            DropdownMenuItem(text = { Text("≡  Complete") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.Completion) })
                             DropdownMenuItem(text = { Text("→  Go to definition") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.Definition) })
                             DropdownMenuItem(text = { Text("↔  Find references") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.References) })
                             DropdownMenuItem(text = { Text("▤  Show Output") }, onClick = {
@@ -1388,6 +1419,13 @@ private fun LeanEditorScreen(
                     onCursorChanged = onCursorChanged,
                     onHover = { path, text, offset -> onLspAction(path, text, offset, LspRequestKind.Hover) },
                     hoverEnabled = lspUiState.status == "Ready",
+                    completionsEnabled = completionsEnabled,
+                    onRequestCompletion = onRequestCompletion,
+                    onDismissCompletion = onDismissCompletion,
+                    onApplyCompletion = { candidate ->
+                        replaceActive(applyCompletion(fieldValues.getValue(editor.activePath!!), candidate))
+                        onDismissCompletion()
+                    },
                     outputFraction = outputFraction,
                     outputCollapsed = outputCollapsed,
                     outputPresentation = outputPresentation,
@@ -1697,6 +1735,22 @@ private fun LeanEditorScreen(
                             )
                         }
                     } else if (page == "editor") {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onCompletionsEnabledChanged(!completionsEnabled) }
+                                .padding(vertical = dimensions.settingsRowPadding),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text("Completions")
+                                Text("Show Lean suggestions while typing", style = shellStyle.supportingStyle)
+                            }
+                            Switch(
+                                checked = completionsEnabled,
+                                onCheckedChange = onCompletionsEnabledChanged,
+                                modifier = Modifier.semantics { contentDescription = "Automatic completions" },
+                            )
+                        }
                         Text("Goals pane position", style = MaterialTheme.typography.titleMedium)
                         listOf(
                             GoalsPanePosition.Auto to "Auto",
@@ -1960,6 +2014,10 @@ private fun EditorContent(
     onCursorChanged: (String, String, Int) -> Unit,
     onHover: (String, String, Int) -> Unit,
     hoverEnabled: Boolean,
+    completionsEnabled: Boolean,
+    onRequestCompletion: (String, String, Int) -> Unit,
+    onDismissCompletion: () -> Unit,
+    onApplyCompletion: (CompletionCandidate) -> Unit,
     outputFraction: Float,
     outputCollapsed: Boolean,
     outputPresentation: OutputPresentation,
@@ -1996,6 +2054,26 @@ private fun EditorContent(
         TextRange(offsetAtLspPosition(value.text, start), offsetAtLspPosition(value.text, end))
     }
     val messagesHaveError = diagnosticSetHasError(activeDiagnostics.map(LspDiagnosticUi::severity))
+    var suppressedCompletionPosition by remember { mutableStateOf<Pair<String, LspPosition>?>(null) }
+    val completionCandidates = lspUiState.completions.takeIf {
+        completionsEnabled && lspUiState.completionPath == editor.activePath &&
+            lspUiState.completionPosition == lspPositionAt(value.text, value.selection.end)
+    }.orEmpty()
+    LaunchedEffect(editor.activePath, value.text, value.selection, completionsEnabled, lspUiState.status) {
+        val currentPosition = editor.activePath to lspPositionAt(value.text, value.selection.end)
+        if (suppressedCompletionPosition == currentPosition) {
+            onDismissCompletion()
+            return@LaunchedEffect
+        }
+        suppressedCompletionPosition = null
+        if (!completionsEnabled || lspUiState.status != "Ready" || !completionPrefixEligible(value)) {
+            onDismissCompletion()
+            return@LaunchedEffect
+        }
+        val caret = value.selection.end
+        delay(240L)
+        onRequestCompletion(editor.activePath, value.text, caret)
+    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
         FileTabStrip(
             editor = editor,
@@ -2052,18 +2130,81 @@ private fun EditorContent(
                         }
                     }
                 }
-                BasicTextField(
-                    value = value,
-                    onValueChange = {
-                        onValueChange(it)
-                        onCursorChanged(editor.activePath, it.text, it.selection.start)
-                    },
-                    modifier = sourceModifier,
-                    enabled = !running,
-                    textStyle = editorStyle.codeStyle.copy(color = editorStyle.contentColor),
-                    visualTransformation = LeanSyntaxVisualTransformation(searchQuery, diagnosticRanges),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(editorStyle.cursorColor),
-                )
+                var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+                var completionSelection by remember { mutableStateOf(0) }
+                val applySelectedCompletion: (CompletionCandidate) -> Unit = { candidate ->
+                    val updated = applyCompletion(value, candidate)
+                    suppressedCompletionPosition = editor.activePath to
+                        lspPositionAt(updated.text, updated.selection.end)
+                    onApplyCompletion(candidate)
+                }
+                LaunchedEffect(completionCandidates) { completionSelection = 0 }
+                androidx.compose.foundation.layout.Box(
+                    sourceModifier
+                        .onPreviewKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown || completionCandidates.isEmpty()) return@onPreviewKeyEvent false
+                            when (event.key) {
+                                Key.DirectionDown -> {
+                                    completionSelection = (completionSelection + 1).coerceAtMost(completionCandidates.lastIndex); true
+                                }
+                                Key.DirectionUp -> {
+                                    completionSelection = (completionSelection - 1).coerceAtLeast(0); true
+                                }
+                                Key.Enter -> { applySelectedCompletion(completionCandidates[completionSelection]); true }
+                                Key.Escape -> { onDismissCompletion(); true }
+                                else -> false
+                            }
+                        },
+                ) {
+                    BasicTextField(
+                        value = value,
+                        onValueChange = {
+                            onValueChange(it)
+                            onCursorChanged(editor.activePath, it.text, it.selection.start)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !running,
+                        textStyle = editorStyle.codeStyle.copy(color = editorStyle.contentColor),
+                        visualTransformation = LeanSyntaxVisualTransformation(searchQuery, diagnosticRanges),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(editorStyle.cursorColor),
+                        onTextLayout = { textLayout = it },
+                    )
+                    if (completionCandidates.isNotEmpty()) {
+                        val cursor = textLayout?.getCursorRect(value.selection.end)
+                        val popupOffset = IntOffset(
+                            (cursor?.left ?: 0f).toInt(),
+                            (cursor?.bottom ?: 0f).toInt(),
+                        )
+                        Popup(
+                            alignment = Alignment.TopStart,
+                            offset = popupOffset,
+                            onDismissRequest = onDismissCompletion,
+                        ) {
+                            Surface(
+                                Modifier.widthIn(min = 180.dp, max = 420.dp).heightIn(max = 280.dp)
+                                    .semantics { contentDescription = "Lean completion suggestions" },
+                                tonalElevation = 6.dp,
+                            ) {
+                                Column(Modifier.verticalScroll(rememberScrollState())) {
+                                    completionCandidates.forEachIndexed { index, candidate ->
+                                        TextButton(
+                                            onClick = { applySelectedCompletion(candidate) },
+                                            modifier = Modifier.fillMaxWidth().semantics {
+                                                contentDescription = "Insert completion ${candidate.label}"
+                                                stateDescription = if (index == completionSelection) "Selected" else "Not selected"
+                                            },
+                                        ) {
+                                            Column(Modifier.fillMaxWidth()) {
+                                                Text(if (index == completionSelection) "› ${candidate.label}" else candidate.label)
+                                                candidate.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         EditorSymbolRow(
@@ -2227,10 +2368,6 @@ private fun GoalsPanel(modifier: Modifier, activePath: String?, lspUiState: LspU
             if (lspUiState.hover.isNotBlank()) {
                 Text("Hover", style = style.titleStyle)
                 HoverMarkdown(lspUiState.hover)
-            }
-            if (lspUiState.completions.isNotEmpty()) {
-                Text("Completions", style = style.titleStyle)
-                Text(lspUiState.completions.joinToString("  "), style = MaterialTheme.typography.bodySmall)
             }
             if (lspUiState.navigationMessage.isNotBlank()) {
                 Text(lspUiState.navigationMessage, style = MaterialTheme.typography.bodySmall)
