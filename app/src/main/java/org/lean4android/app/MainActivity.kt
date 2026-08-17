@@ -42,9 +42,7 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.contextmenu.builder.item
-import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
 import androidx.compose.foundation.text.contextmenu.modifier.appendTextContextMenuComponents
-import androidx.compose.foundation.text.contextmenu.modifier.filterTextContextMenuComponents
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -2387,6 +2385,9 @@ private fun EditorContent(
     var suppressedCompletionPosition by remember { mutableStateOf<Pair<String, LspPosition>?>(null) }
     var completionEditSequence by remember(editor.activePath) { mutableStateOf(0L) }
     var pendingCompletionEdit by remember(editor.activePath) { mutableStateOf<TextFieldValue?>(null) }
+    var pendingLeanContextActions by remember(editor.activePath) {
+        mutableStateOf<Triple<String, String, Int>?>(null)
+    }
     val completionCandidates = lspUiState.completions.takeIf {
         isLeanFile && completionsEnabled && lspUiState.completionPath == editor.activePath &&
             lspUiState.completionPosition == lspPositionAt(value.text, value.selection.end)
@@ -2455,18 +2456,6 @@ private fun EditorContent(
                         contentDescription = (if (isLeanFile) "Lean source editor for " else "Text editor for ") + editor.activePath
                         stateDescription = if (editor.tabs.single { it.path == editor.activePath }.dirty) "Unsaved changes" else "Saved"
                     }
-                if (hoverEnabled && isLeanFile) {
-                    // Samsung's API-33 floating toolbar exposes only four entries and does not
-                    // provide overflow for later Compose components. Keep Copy available, but
-                    // omit Cut/Paste/Select-all so every Lean action is
-                    // reachable instead of silently existing past the native toolbar's limit.
-                    sourceModifier = sourceModifier
-                        .filterTextContextMenuComponents { component ->
-                            component.key != TextContextMenuKeys.CutKey &&
-                                component.key != TextContextMenuKeys.PasteKey &&
-                                component.key != TextContextMenuKeys.SelectAllKey
-                        }
-                }
                 var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                 var completionSelection by remember { mutableStateOf(0) }
                 val applySelectedCompletion: (CompletionCandidate) -> Unit = { candidate ->
@@ -2497,16 +2486,12 @@ private fun EditorContent(
                     var editorViewportModifier = Modifier.fillMaxWidth().horizontalScroll(editorHorizontalScroll)
                     if (hoverEnabled && isLeanFile) {
                         editorViewportModifier = editorViewportModifier.appendTextContextMenuComponents {
-                            item(HoverContextMenuKey, "Hover") {
-                                onHover(editor.activePath, value.text, value.selection.start)
-                                close()
-                            }
-                            item(DefinitionContextMenuKey, "Definition") {
-                                onDefinition(editor.activePath, value.text, value.selection.start)
-                                close()
-                            }
-                            item(ReferencesContextMenuKey, "References") {
-                                onReferences(editor.activePath, value.text, value.selection.start)
+                            item(LeanActionsContextMenuKey, "More") {
+                                pendingLeanContextActions = Triple(
+                                    editor.activePath,
+                                    value.text,
+                                    value.selection.start,
+                                )
                                 close()
                             }
                         }
@@ -2626,6 +2611,32 @@ private fun EditorContent(
             if (paneVisible(outputCollapsed)) OutputPanel(
                 runState, Modifier.weight(outputFraction), outputSnapshot, retainedRun,
                 onSendInput, onCloseInput, onCancel, onExportStdout, onExportStderr,
+            )
+        }
+        pendingLeanContextActions?.let { (path, text, offset) ->
+            AlertDialog(
+                onDismissRequest = { pendingLeanContextActions = null },
+                title = { Text("More") },
+                text = {
+                    Column(Modifier.semantics { contentDescription = "Lean editor actions" }) {
+                        TextButton(onClick = {
+                            pendingLeanContextActions = null
+                            onHover(path, text, offset)
+                        }) { Text("Hover") }
+                        TextButton(onClick = {
+                            pendingLeanContextActions = null
+                            onDefinition(path, text, offset)
+                        }) { Text("Definition") }
+                        TextButton(onClick = {
+                            pendingLeanContextActions = null
+                            onReferences(path, text, offset)
+                        }) { Text("References") }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { pendingLeanContextActions = null }) { Text("Dismiss") }
+                },
             )
         }
     }
@@ -2748,9 +2759,7 @@ private fun GoalsPanel(modifier: Modifier, activePath: String?, lspUiState: LspU
     }
 }
 
-private object HoverContextMenuKey
-private object DefinitionContextMenuKey
-private object ReferencesContextMenuKey
+private object LeanActionsContextMenuKey
 
 internal fun goalPaneSections(goal: String?, expectedType: String?): List<Pair<String?, String>> {
     val tactic = goal.orEmpty().trim().takeUnless { it.isEmpty() || it.equals("No goals", ignoreCase = true) }
