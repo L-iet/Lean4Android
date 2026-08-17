@@ -323,6 +323,8 @@ Android randomizes the first path after an APK update. Never store it in the imm
 
 Direct Lean commands require a deterministic environment containing `HOME`, app-writable `TMPDIR`, `LEAN_SYSROOT`, `LEAN_PATH`, `PATH`, `LD_LIBRARY_PATH`, and an explicit `TZ` pointing to the installer-owned UTC TZif fallback. Lake commands use the same base environment plus `LAKE_HOME` and `LAKE_OVERRIDE_LEAN=true`, but deliberately omit a global `LEAN_PATH` so Lake can construct the project-aware search path for child Lean processes. Device testing showed that `lake lean` needs `TMPDIR` because Android's default temporary location is not writable by the app UID. It also showed that Lean Server exits after `initialized` when `TZ` is unset because Android lacks `/etc/localtime`; the small UTC fallback makes server startup deterministic without depending on device-specific timezone storage. `ToolchainCommandFactory` is the production source of these shell-free command definitions; UI code must not reconstruct their paths or environment maps.
 
+For user program execution, first run the supported Lake build, then launch the pinned Lean executable as `lean --run <source>` with the project `.lake/build/lib/lean` directory prepended to `LEAN_PATH`. Do not substitute plain file elaboration or `lake lean`: API-33 testing showed those paths execute `#eval` with EOF, while `lean --run` preserves the supervised interactive stdin pipe for `main`.
+
 Lake expects conventional paths. The installer/locator must provide links conceptually equivalent to:
 
 ```text

@@ -15,11 +15,13 @@ class ToolchainCommandFactory(
         arguments: List<String>,
         workingDirectory: File,
         timeout: Duration = 30.seconds,
+        additionalLeanPaths: List<File> = emptyList(),
     ) = ProcessCommand(
         executable = layout.leanExecutable,
         arguments = arguments,
         workingDirectory = workingDirectory,
-        environment = commonEnvironment() + ("LEAN_PATH" to layout.leanLibraryDirectory.path),
+        environment = commonEnvironment() + ("LEAN_PATH" to
+            (additionalLeanPaths + layout.leanLibraryDirectory).joinToString(File.pathSeparator) { it.path }),
         timeout = timeout,
     )
 

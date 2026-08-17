@@ -956,7 +956,7 @@ class MainActivity : ComponentActivity() {
                 val buildCommand = repository.lakeBuild(factory, activeProjectId)
                 val entry = repository.open(activeProjectId).sourceFiles.firstOrNull { it == "Main.lean" }
                     ?: repository.open(activeProjectId).sourceFiles.first()
-                runOnUiThread { startBuildThenRun(buildCommand, repository.lakeLean(factory, activeProjectId, entry), entry, stdinPlan, update) }
+                runOnUiThread { startBuildThenRun(buildCommand, repository.leanProgram(factory, activeProjectId, entry), entry, stdinPlan, update) }
             }.onFailure { failure -> runOnUiThread { update(EditorRunState.Failed(failure.message ?: failure::class.java.simpleName)) } }
         }
     }

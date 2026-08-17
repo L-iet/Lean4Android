@@ -46,6 +46,8 @@ The current supervisor needs these changes:
 
 Build jobs should continue using immediate EOF. Only the program phase of build-then-run receives the user-selected stdin plan. LSP continues to own its JSON-RPC stdin separately and must not use this console API.
 
+The program phase launches the pinned Lean executable as `lean --run <contained-source>` after a successful Lake build, with the app-managed project build library prepended to the deterministic `LEAN_PATH`. Physical API-33 evidence showed that plain `lake lean`/file elaboration executes `#eval` with EOF and is not the supported interactive-program boundary. Lake remains responsible for building the project; the direct `--run` child is what receives the supervised stdin pipe and uses the project root as its working directory.
+
 ## Typed model
 
 The exact Kotlin names may change during implementation, but the process layer should preserve the following separation:
@@ -239,4 +241,3 @@ Compilation or a successful non-interactive run alone is not acceptance evidence
 - EOF, cancellation, UI dismissal, and process exit remain separate actions.
 - Output is continuously drained even after retention limits are reached.
 - App-process death must terminate the child unless a future ADR proves safe stream reattachment.
-

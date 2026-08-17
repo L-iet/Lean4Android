@@ -26,6 +26,21 @@ class ToolchainCommandFactoryTest {
     }
 
     @Test
+    fun `Lean command prepends reviewed project library paths`() {
+        val fixture = fixture()
+        val projectLibrary = fixture.project.resolve(".lake/build/lib/lean")
+
+        val command = fixture.factory.lean(
+            listOf("Main.lean"), fixture.project, additionalLeanPaths = listOf(projectLibrary),
+        )
+
+        assertEquals(
+            projectLibrary.path + java.io.File.pathSeparator + fixture.layout.leanLibraryDirectory.path,
+            command.environment["LEAN_PATH"],
+        )
+    }
+
+    @Test
     fun `Lake command selects writable compatibility layout without forcing Lean path`() {
         val fixture = fixture()
         val command = fixture.factory.lake(listOf("build"), fixture.project)

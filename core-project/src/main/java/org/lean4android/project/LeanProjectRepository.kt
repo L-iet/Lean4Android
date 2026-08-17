@@ -370,6 +370,15 @@ class LeanProjectRepository(
         return factory.lake(listOf("lean", source), project.directory, timeout)
     }
 
+    /** Runs an already-built source directly so the supervised stdin pipe reaches Lean unchanged. */
+    fun leanProgram(factory: ToolchainCommandFactory, id: String, source: String, timeout: Duration = 2.minutes): ProcessCommand {
+        val project = reconcileLakeConfiguration(id)
+        val file = resolveContained(project.directory, source)
+        require(file.isFile && file.extension == "lean") { "Lean source does not exist: $source" }
+        val projectLibrary = project.directory.resolve(".lake/build/lib/lean")
+        return factory.lean(listOf("--run", source), project.directory, timeout, listOf(projectLibrary))
+    }
+
     fun reconcileLakeConfiguration(projectId: String): LeanProject {
         val project = open(projectId)
         reconcileLakeConfiguration(project.directory, projectId)
