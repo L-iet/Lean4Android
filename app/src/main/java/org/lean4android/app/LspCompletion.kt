@@ -13,13 +13,17 @@ internal data class CompletionCandidate(
 
 internal const val MAX_COMPLETION_SUGGESTIONS = 5
 
-internal fun parseCompletionCandidates(result: JsonValue?, limit: Int = MAX_COMPLETION_SUGGESTIONS): List<CompletionCandidate> {
+internal fun parseCompletionCandidates(
+    result: JsonValue?,
+    prefix: String? = null,
+    limit: Int = MAX_COMPLETION_SUGGESTIONS,
+): List<CompletionCandidate> {
     val values = when (result) {
         is JsonValue.ArrayValue -> result.values
         is JsonValue.ObjectValue -> (result.fields["items"] as? JsonValue.ArrayValue)?.values.orEmpty()
         else -> emptyList()
     }
-    return values.mapNotNull { raw ->
+    val candidates = values.mapNotNull { raw ->
         val item = raw as? JsonValue.ObjectValue ?: return@mapNotNull null
         val label = (item.fields["label"] as? JsonValue.StringValue)?.value?.takeIf(String::isNotBlank)
             ?: return@mapNotNull null
@@ -36,7 +40,12 @@ internal fun parseCompletionCandidates(result: JsonValue?, limit: Int = MAX_COMP
             insertion = if (snippet) label else replacement,
             editRange = parseCompletionRange(range),
         )
-    }.distinctBy { listOf(it.label, it.insertion, it.editRange) }.take(limit.coerceIn(1, MAX_COMPLETION_SUGGESTIONS))
+    }.distinctBy { listOf(it.label, it.insertion, it.editRange) }
+    val typedPrefix = prefix?.takeIf(String::isNotBlank)
+    val ranked = if (typedPrefix == null) candidates else candidates
+        .filter { it.label.contains(typedPrefix, ignoreCase = true) }
+        .sortedBy { if (it.label.startsWith(typedPrefix, ignoreCase = true)) 0 else 1 }
+    return ranked.take(limit.coerceIn(1, MAX_COMPLETION_SUGGESTIONS))
 }
 
 private fun parseCompletionRange(value: JsonValue?): Pair<LspPosition, LspPosition>? {
@@ -67,3 +76,12 @@ internal fun completionPrefixEligible(value: TextFieldValue): Boolean {
     val previous = value.text.getOrNull(value.selection.end - 1) ?: return false
     return previous.isLetterOrDigit() || previous == '_' || previous == '\''
 }
+
+internal fun completionPrefix(text: String, offset: Int): String {
+    val caret = offset.coerceIn(0, text.length)
+    val start = text.take(caret).indexOfLast { !it.isLetterOrDigit() && it != '_' && it != '\'' } + 1
+    return text.substring(start, caret)
+}
+
+internal fun isCompletionTypingChange(previous: TextFieldValue, current: TextFieldValue): Boolean =
+    current.text != previous.text || (previous.composition != null && current.composition == null)

@@ -36,10 +36,27 @@ class LspCompletionTest {
         assertEquals(MAX_COMPLETION_SUGGESTIONS, parseCompletionCandidates(result).size)
     }
 
+    @Test fun filtersAndRanksTypedPrefixBeforeApplyingFiveItemCap() {
+        val labels = listOf("cbv", "lift_lets", "with_reducible_and_instances", "clear_value", "trace_state", "rfl", "rfl'", "grind_rfl")
+        val result = JsonValue.ArrayValue(labels.map { label ->
+            JsonValue.ObjectValue(mapOf("label" to JsonValue.StringValue(label)))
+        })
+        assertEquals(listOf("rfl", "rfl'", "grind_rfl"), parseCompletionCandidates(result, prefix = "rf").map { it.label })
+        assertEquals("answer", completionPrefix("example : TestProj2.answer", 26))
+    }
+
     @Test fun automaticRequestRequiresCollapsedIdentifierPrefix() {
         assertEquals(true, completionPrefixEligible(TextFieldValue("ans", TextRange(3))))
         assertEquals(false, completionPrefixEligible(TextFieldValue("ans ", TextRange(4))))
         assertEquals(false, completionPrefixEligible(TextFieldValue("ans", TextRange(0, 3))))
+    }
+
+    @Test fun completionTriggerRequiresTypingRatherThanCursorMovement() {
+        val original = TextFieldValue("TestProj2.a", TextRange(11))
+        assertEquals(false, isCompletionTypingChange(original, original.copy(selection = TextRange(5))))
+        assertEquals(true, isCompletionTypingChange(original, TextFieldValue("TestProj2.an", TextRange(12))))
+        val composing = TextFieldValue("rf", TextRange(2), composition = TextRange(0, 2))
+        assertEquals(true, isCompletionTypingChange(composing, composing.copy(composition = null)))
     }
 
     private fun item(label: String, replacement: String, start: Int, end: Int) = JsonValue.ObjectValue(mapOf(

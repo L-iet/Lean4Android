@@ -534,8 +534,13 @@ class MainActivity : ComponentActivity() {
                 )
                 LspRequestKind.Completion -> {
                     if (latestCompletionPositions[pending.path] != pending.position) return@runOnUiThread
+                    val currentText = editorState.tabs.firstOrNull { it.path == pending.path }?.contents
+                        ?: return@runOnUiThread
                     lspUiState = lspUiState.copy(
-                        completions = parseCompletionCandidates(response.result),
+                        completions = parseCompletionCandidates(
+                            response.result,
+                            completionPrefix(currentText, offsetAtLspPosition(currentText, pending.position)),
+                        ),
                         completionPath = pending.path,
                         completionPosition = pending.position,
                     )
@@ -2055,24 +2060,27 @@ private fun EditorContent(
     }
     val messagesHaveError = diagnosticSetHasError(activeDiagnostics.map(LspDiagnosticUi::severity))
     var suppressedCompletionPosition by remember { mutableStateOf<Pair<String, LspPosition>?>(null) }
+    var completionEditSequence by remember(editor.activePath) { mutableStateOf(0L) }
+    var pendingCompletionEdit by remember(editor.activePath) { mutableStateOf<TextFieldValue?>(null) }
     val completionCandidates = lspUiState.completions.takeIf {
         completionsEnabled && lspUiState.completionPath == editor.activePath &&
             lspUiState.completionPosition == lspPositionAt(value.text, value.selection.end)
     }.orEmpty()
-    LaunchedEffect(editor.activePath, value.text, value.selection, completionsEnabled, lspUiState.status) {
-        val currentPosition = editor.activePath to lspPositionAt(value.text, value.selection.end)
+    LaunchedEffect(editor.activePath, completionEditSequence, completionsEnabled, lspUiState.status) {
+        val typedValue = pendingCompletionEdit ?: return@LaunchedEffect
+        if (typedValue.text != value.text || typedValue.selection != value.selection) return@LaunchedEffect
+        val currentPosition = editor.activePath to lspPositionAt(typedValue.text, typedValue.selection.end)
         if (suppressedCompletionPosition == currentPosition) {
             onDismissCompletion()
             return@LaunchedEffect
         }
         suppressedCompletionPosition = null
-        if (!completionsEnabled || lspUiState.status != "Ready" || !completionPrefixEligible(value)) {
+        if (!completionsEnabled || lspUiState.status != "Ready" || !completionPrefixEligible(typedValue)) {
             onDismissCompletion()
             return@LaunchedEffect
         }
-        val caret = value.selection.end
         delay(240L)
-        onRequestCompletion(editor.activePath, value.text, caret)
+        onRequestCompletion(editor.activePath, typedValue.text, typedValue.selection.end)
     }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
         FileTabStrip(
@@ -2102,6 +2110,7 @@ private fun EditorContent(
             }
         }
         val editorScroll = rememberScrollState()
+        val editorHorizontalScroll = rememberScrollState()
         val editorStyle = LeanTheme.components.editor
         Surface(Modifier.fillMaxWidth().weight(1f - outputFraction), color = editorStyle.containerColor, shape = editorStyle.shape) {
             Row(Modifier.fillMaxSize().verticalScroll(editorScroll).padding(vertical = dimensions.editorVerticalPadding)) {
@@ -2116,7 +2125,6 @@ private fun EditorContent(
                 )
                 var sourceModifier = Modifier
                     .weight(1f)
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = dimensions.editorSourceHorizontalPadding)
                     .semantics {
                         contentDescription = "Lean source editor for ${editor.activePath}"
@@ -2139,7 +2147,7 @@ private fun EditorContent(
                     onApplyCompletion(candidate)
                 }
                 LaunchedEffect(completionCandidates) { completionSelection = 0 }
-                androidx.compose.foundation.layout.Box(
+                androidx.compose.foundation.layout.BoxWithConstraints(
                     sourceModifier
                         .onPreviewKeyEvent { event ->
                             if (event.type != KeyEventType.KeyDown || completionCandidates.isEmpty()) return@onPreviewKeyEvent false
@@ -2156,23 +2164,35 @@ private fun EditorContent(
                             }
                         },
                 ) {
-                    BasicTextField(
-                        value = value,
-                        onValueChange = {
-                            onValueChange(it)
-                            onCursorChanged(editor.activePath, it.text, it.selection.start)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !running,
-                        textStyle = editorStyle.codeStyle.copy(color = editorStyle.contentColor),
-                        visualTransformation = LeanSyntaxVisualTransformation(searchQuery, diagnosticRanges),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(editorStyle.cursorColor),
-                        onTextLayout = { textLayout = it },
-                    )
+                    val editorViewportWidth = maxWidth
+                    androidx.compose.foundation.layout.Box(
+                        Modifier.fillMaxWidth().horizontalScroll(editorHorizontalScroll),
+                    ) {
+                        BasicTextField(
+                            value = value,
+                            onValueChange = {
+                                if (isCompletionTypingChange(value, it)) {
+                                    pendingCompletionEdit = it
+                                    completionEditSequence++
+                                } else {
+                                    pendingCompletionEdit = null
+                                    onDismissCompletion()
+                                }
+                                onValueChange(it)
+                                onCursorChanged(editor.activePath, it.text, it.selection.start)
+                            },
+                            modifier = Modifier.widthIn(min = editorViewportWidth),
+                            enabled = !running,
+                            textStyle = editorStyle.codeStyle.copy(color = editorStyle.contentColor),
+                            visualTransformation = LeanSyntaxVisualTransformation(searchQuery, diagnosticRanges),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(editorStyle.cursorColor),
+                            onTextLayout = { textLayout = it },
+                        )
+                    }
                     if (completionCandidates.isNotEmpty()) {
                         val cursor = textLayout?.getCursorRect(value.selection.end)
                         val popupOffset = IntOffset(
-                            (cursor?.left ?: 0f).toInt(),
+                            ((cursor?.left ?: 0f) - editorHorizontalScroll.value).toInt(),
                             (cursor?.bottom ?: 0f).toInt(),
                         )
                         Popup(
