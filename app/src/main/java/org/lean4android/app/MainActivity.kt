@@ -320,7 +320,7 @@ class MainActivity : ComponentActivity() {
                     onExportStderr = { requestOutputExport(OutputStreamKind.Stderr) },
                     onVerifyRuntime = ::verifyRuntime,
                     projects = repository.list().map { it.id },
-                    projectFiles = repository.open(activeProjectId).sourceFiles,
+                    projectFiles = repository.open(activeProjectId).files,
                     projectInputFiles = repository.listInputFiles(activeProjectId),
                     recentProjects = recentProjects(),
                     onOpenProject = ::switchProject,
@@ -653,7 +653,7 @@ class MainActivity : ComponentActivity() {
         val service = lspService ?: return
         val generation = lspUiState.generation ?: return
         val project = runCatching { editorRepository().open(activeProjectId) }.getOrNull() ?: return
-        val buffers = editorState.tabs.associate { tab ->
+        val buffers = editorState.tabs.filter { it.path.endsWith(".lean") }.associate { tab ->
             project.directory.resolve(tab.path).toURI().toString() to tab.contents
         }
         runCatching { service.synchronizeDocuments(activeProjectId, generation, buffers) }
@@ -1386,6 +1386,7 @@ private fun LeanEditorScreen(
 
     fun requestLsp(kind: LspRequestKind) {
         val path = editor.activePath ?: return
+        if (!path.endsWith(".lean")) return
         val value = fieldValues[path] ?: return
         onLspAction(path, value.text, value.selection.start, kind)
     }
@@ -1393,7 +1394,11 @@ private fun LeanEditorScreen(
     LaunchedEffect(lspUiState.definition) {
         val target = lspUiState.definition ?: return@LaunchedEffect
         if (target.path !in projectFiles) return@LaunchedEffect
-        val next = onOpenSource(editor, target.path)
+        val next = runCatching { onOpenSource(editor, target.path) }.getOrElse { failure ->
+            runState = EditorRunState.Failed(failure.message ?: "Could not open project file")
+            outputSnapshot = formatRunState(runState)
+            return@LaunchedEffect
+        }
         val tab = next.tabs.single { it.path == target.path }
         val offset = offsetAtLspPosition(tab.contents, LspPosition(target.line, target.character))
         fieldValues[target.path] = TextFieldValue(tab.contents, TextRange(offset))
@@ -1539,7 +1544,7 @@ private fun LeanEditorScreen(
                             DropdownMenuItem(text = { Text("＋  New") }, enabled = !running, onClick = {
                                 filesMenu = false
                                 requestedPath = LeanProjectRepository.defaultNewSourcePath(editor.projectId)
-                                fileAction = "New source"
+                                fileAction = "New file"
                             })
                             DropdownMenuItem(text = { Text("▣  New Project") }, enabled = !running, onClick = {
                                 filesMenu = false; newProjectName = ""; newProjectError = null; newProjectDialog = true
@@ -1558,9 +1563,10 @@ private fun LeanEditorScreen(
                             DropdownMenuItem(text = { Text("↶  Undo") }, enabled = histories[editor.activePath]?.canUndo == true, onClick = { moreMenu = false; undo() })
                             DropdownMenuItem(text = { Text("↷  Redo") }, enabled = histories[editor.activePath]?.canRedo == true, onClick = { moreMenu = false; redo() })
                             DropdownMenuItem(text = { Text("⌕  Find") }, enabled = editor.activePath != null, onClick = { moreMenu = false; searchVisible = true })
-                            DropdownMenuItem(text = { Text("ⓘ  Hover") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.Hover) })
-                            DropdownMenuItem(text = { Text("→  Go to definition") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.Definition) })
-                            DropdownMenuItem(text = { Text("↔  Find references") }, enabled = lspUiState.status == "Ready" && editor.activePath != null, onClick = { moreMenu = false; requestLsp(LspRequestKind.References) })
+                            val leanLspAvailable = lspUiState.status == "Ready" && editor.activePath?.endsWith(".lean") == true
+                            DropdownMenuItem(text = { Text("ⓘ  Hover") }, enabled = leanLspAvailable, onClick = { moreMenu = false; requestLsp(LspRequestKind.Hover) })
+                            DropdownMenuItem(text = { Text("→  Go to definition") }, enabled = leanLspAvailable, onClick = { moreMenu = false; requestLsp(LspRequestKind.Definition) })
+                            DropdownMenuItem(text = { Text("↔  Find references") }, enabled = leanLspAvailable, onClick = { moreMenu = false; requestLsp(LspRequestKind.References) })
                             DropdownMenuItem(text = { Text("▤  Show Output") }, onClick = {
                                 moreMenu = false
                                 revealOutput(outputPresentation, outputCollapsed).also { reveal ->
@@ -1720,7 +1726,16 @@ private fun LeanEditorScreen(
                                     }
                                 },
                                 onOpenFile = { path ->
-                                    val next = onOpenSource(editor, path)
+                                    val next = runCatching { onOpenSource(editor, path) }.getOrElse { failure ->
+                                        runState = EditorRunState.Failed(failure.message ?: "Could not open project file")
+                                        outputSnapshot = formatRunState(runState)
+                                        revealOutput(outputPresentation, outputCollapsed).also { reveal ->
+                                            outputCollapsed = reveal.dockedCollapsed
+                                            outputPopupVisible = reveal.popupVisible
+                                        }
+                                        drawerOpen = false
+                                        return@ProjectTree
+                                    }
                                     if (path !in fieldValues) {
                                         val opened = next.tabs.single { it.path == path }
                                         fieldValues[path] = TextFieldValue(opened.contents, TextRange(opened.contents.length))
@@ -2102,14 +2117,14 @@ private fun LeanEditorScreen(
                         value = requestedPath,
                         onValueChange = { requestedPath = it },
                         singleLine = true,
-                        label = { Text("Project-relative .lean path") },
+                        label = { Text("Project-relative file path") },
                     )
             },
             confirmButton = {
                 TextButton(onClick = {
                     runCatching {
                         when (action) {
-                            "New source" -> onCreateSource(editor, requestedPath)
+                            "New file" -> onCreateSource(editor, requestedPath)
                             "Save As" -> onSaveAs(editor, requestedPath)
                             else -> error("Unknown file action")
                         }
@@ -2281,9 +2296,10 @@ private fun EditorContent(
         return
     }
     val matches = findEditorMatches(value.text, searchQuery)
-    val activeDiagnostics = lspUiState.diagnostics.entries
+    val isLeanFile = editor.activePath.endsWith(".lean")
+    val activeDiagnostics = if (isLeanFile) lspUiState.diagnostics.entries
         .firstOrNull { (uri, _) -> uri.endsWith("/${editor.activePath}") }
-        ?.value.orEmpty()
+        ?.value.orEmpty() else emptyList()
     val diagnosticRanges = activeDiagnostics.mapNotNull { diagnostic ->
         val start = diagnostic.start ?: return@mapNotNull null
         val end = diagnostic.end ?: return@mapNotNull null
@@ -2294,7 +2310,7 @@ private fun EditorContent(
     var completionEditSequence by remember(editor.activePath) { mutableStateOf(0L) }
     var pendingCompletionEdit by remember(editor.activePath) { mutableStateOf<TextFieldValue?>(null) }
     val completionCandidates = lspUiState.completions.takeIf {
-        completionsEnabled && lspUiState.completionPath == editor.activePath &&
+        isLeanFile && completionsEnabled && lspUiState.completionPath == editor.activePath &&
             lspUiState.completionPosition == lspPositionAt(value.text, value.selection.end)
     }.orEmpty()
     LaunchedEffect(editor.activePath, completionEditSequence, completionsEnabled, lspUiState.status) {
@@ -2306,7 +2322,7 @@ private fun EditorContent(
             return@LaunchedEffect
         }
         suppressedCompletionPosition = null
-        if (!completionsEnabled || lspUiState.status != "Ready" || !completionPrefixEligible(typedValue)) {
+        if (!isLeanFile || !completionsEnabled || lspUiState.status != "Ready" || !completionPrefixEligible(typedValue)) {
             onDismissCompletion()
             return@LaunchedEffect
         }
@@ -2332,7 +2348,7 @@ private fun EditorContent(
                     onValueChange = onSearchQuery,
                     singleLine = true,
                     label = { Text("Find in file") },
-                    modifier = Modifier.width(dimensions.findFieldWidth).semantics { contentDescription = "Find text in current Lean file" },
+                    modifier = Modifier.width(dimensions.findFieldWidth).semantics { contentDescription = "Find text in current file" },
                 )
                 Text("${matches.size} matches")
                 TextButton(enabled = matches.isNotEmpty(), onClick = onSearchPrevious) { Text("Previous") }
@@ -2358,10 +2374,10 @@ private fun EditorContent(
                     .weight(1f)
                     .padding(horizontal = dimensions.editorSourceHorizontalPadding)
                     .semantics {
-                        contentDescription = "Lean source editor for ${editor.activePath}"
+                        contentDescription = (if (isLeanFile) "Lean source editor for " else "Text editor for ") + editor.activePath
                         stateDescription = if (editor.tabs.single { it.path == editor.activePath }.dirty) "Unsaved changes" else "Saved"
                     }
-                if (hoverEnabled) {
+                if (hoverEnabled && isLeanFile) {
                     sourceModifier = sourceModifier.appendTextContextMenuComponents {
                         item(HoverContextMenuKey, "Hover") {
                             onHover(editor.activePath, value.text, value.selection.start)
@@ -2415,7 +2431,9 @@ private fun EditorContent(
                             modifier = Modifier.widthIn(min = editorViewportWidth),
                             enabled = !running,
                             textStyle = editorStyle.codeStyle.copy(color = editorStyle.contentColor),
-                            visualTransformation = LeanSyntaxVisualTransformation(searchQuery, diagnosticRanges),
+                            visualTransformation = EditorHighlighterRegistry.visualTransformation(
+                                editor.activePath, searchQuery, diagnosticRanges,
+                            ),
                             cursorBrush = androidx.compose.ui.graphics.SolidColor(editorStyle.cursorColor),
                             onTextLayout = { textLayout = it },
                         )

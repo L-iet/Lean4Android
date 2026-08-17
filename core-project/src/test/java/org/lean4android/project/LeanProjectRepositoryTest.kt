@@ -26,6 +26,7 @@ class LeanProjectRepositoryTest {
         assertFalse(created.directory.resolve("lakefile.toml").readText().contains("globs ="))
 
         repository.save("sample", "Sample/Basic.lean", "namespace Sample\ndef answer : Nat := 41\nend Sample\n")
+        repository.createSource("sample", "notes/readme.txt", "portable notes\n")
         val archive = temporary.root.resolve("sample.zip")
         repository.export("sample", archive)
         repository.delete("sample")
@@ -34,6 +35,7 @@ class LeanProjectRepositoryTest {
         val imported = repository.import("sample", archive)
         assertEquals(2, imported.sourceFiles.size)
         assertTrue(imported.directory.resolve("Sample/Basic.lean").readText().contains("41"))
+        assertEquals("portable notes\n", repository.read("sample", "notes/readme.txt"))
     }
 
     @Test fun `project names normalize spaces and creation rejects invalid and case folded collisions`() {
@@ -77,8 +79,7 @@ class LeanProjectRepositoryTest {
         val repository = LeanProjectRepository(temporary.newFolder("projects"), "toolchain")
         val project = repository.create("sample")
         project.directory.resolve(".lake/build/output.olean").apply { parentFile?.mkdirs(); writeText("generated") }
-        project.directory.resolve("editor-recovery.bin").writeText("private")
-        project.directory.resolve("secret.token").writeText("secret")
+        project.directory.resolve("notes.txt").writeText("portable")
 
         val first = java.io.ByteArrayOutputStream().also { repository.export("sample", it) }.toByteArray()
         val second = java.io.ByteArrayOutputStream().also { repository.export("sample", it) }.toByteArray()
@@ -93,7 +94,7 @@ class LeanProjectRepositoryTest {
             }
         }
         assertEquals(entries.sorted(), entries)
-        assertEquals(listOf(".lean4android-project", "Main.lean", "Sample/Basic.lean", "lakefile.toml", "lean-toolchain"), entries)
+        assertEquals(listOf(".lean4android-project", "Main.lean", "Sample/Basic.lean", "lakefile.toml", "lean-toolchain", "notes.txt"), entries)
     }
 
     @Test fun portableExportRejectsSymbolicLinks() {
@@ -131,11 +132,11 @@ class LeanProjectRepositoryTest {
         assertFalse(root.resolve(".hostile.importing").exists())
     }
 
-    @Test fun rejectsUnsafeNamesAndNonLeanSave() {
+    @Test fun rejectsUnsafeNamesAndMissingFileSave() {
         val repository = LeanProjectRepository(temporary.newFolder("projects"), "toolchain")
         expectFailure("safe filename") { repository.create("../bad") }
         repository.create("good")
-        expectFailure("Only Lean") { repository.save("good", "notes.txt", "no") }
+        expectFailure("does not exist") { repository.save("good", "notes.txt", "no") }
     }
 
     @Test fun rapidSaveAdvancesTimestampForLakeIncrementality() {
@@ -312,6 +313,30 @@ class LeanProjectRepositoryTest {
         assertTrue("z-input.txt" in inputs)
         assertTrue("Main.lean" in inputs)
         assertFalse(inputs.any { it.startsWith('.') || it == "oversized.bin" || it == "linked.txt" })
+    }
+
+    @Test fun generalTextFilesAreVisibleStrictBoundedAtomicAndLifecycleSafe() {
+        val repository = LeanProjectRepository(temporary.newFolder("general-text"), "toolchain")
+        val project = repository.create("sample")
+
+        repository.createSource("sample", "notes/readme.txt", "hello λ\n")
+        assertTrue("notes/readme.txt" in repository.open("sample").files)
+        assertFalse("notes/readme.txt" in repository.open("sample").sourceFiles)
+        assertEquals("hello λ\n", repository.read("sample", "notes/readme.txt"))
+
+        repository.save("sample", "notes/readme.txt", "updated\n")
+        repository.renameEntry("sample", "notes/readme.txt", "notes/renamed.md")
+        assertEquals("updated\n", repository.read("sample", "notes/renamed.md"))
+        repository.deleteEntry("sample", "notes/renamed.md")
+        assertFalse("notes/renamed.md" in repository.open("sample").files)
+
+        project.directory.resolve("binary.dat").writeBytes(byteArrayOf(0xC3.toByte(), 0x28))
+        assertTrue("binary.dat" in repository.open("sample").files)
+        expectFailure("not valid UTF-8") { repository.read("sample", "binary.dat") }
+
+        RandomAccessFile(project.directory.resolve("large.txt"), "rw").use { it.setLength(8L * 1024 * 1024 + 1) }
+        expectFailure("exceeds 8 MiB") { repository.read("sample", "large.txt") }
+        expectFailure("metadata cannot be edited") { repository.save("sample", "lakefile.toml", "bad") }
     }
 
     @Test fun folderAndStandaloneImportsActivateOnlyValidatedCopies() {

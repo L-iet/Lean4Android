@@ -70,6 +70,17 @@ class LeanEditorEngineTest {
         })
     }
 
+    @Test fun `highlighter registry uses plain fallback without Lean token decoration`() {
+        val source = "def plain text 42"
+        val plain = plainHighlightedText(source)
+
+        assertEquals(source, plain.text)
+        assertTrue(plain.spanStyles.isEmpty())
+        assertTrue(EditorHighlighterRegistry.visualTransformation("notes.txt") is PlainTextVisualTransformation)
+        assertTrue(EditorHighlighterRegistry.visualTransformation("Main.lean") is LeanSyntaxVisualTransformation)
+        assertTrue(plainHighlightedText(source, "plain").spanStyles.isNotEmpty())
+    }
+
     @Test fun `LSP positions use zero based lines and UTF-16 code units`() {
         val source = "α🙂x\nsecond"
         assertEquals(LspPosition(0, 0), lspPositionAt(source, 0))

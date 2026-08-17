@@ -116,7 +116,7 @@ internal class EditorSessionStore(private val snapshot: File) {
         val project = repository.open(projectId)
         val recovered = runCatching { readSnapshot() }.getOrNull()
         if (recovered != null && recovered.projectId == projectId &&
-            recovered.tabs.map(EditorTab::path).all { it in project.sourceFiles }
+            recovered.tabs.map(EditorTab::path).all { it in project.files }
         ) return recovered
 
         val initialPaths = buildList {

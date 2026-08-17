@@ -14,6 +14,8 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipEntry
@@ -26,6 +28,7 @@ data class LeanProject(
     val id: String,
     val directory: File,
     val sourceFiles: List<String>,
+    val files: List<String> = sourceFiles,
 )
 
 class ProjectInputRevision internal constructor(
@@ -66,6 +69,7 @@ class LeanProjectRepository(
         private const val METADATA = ".lean4android-project"
         private const val MAX_PROJECT_ENTRIES = 10_000
         private const val MAX_PROJECT_FILE_BYTES = 64L * 1024 * 1024
+        private const val MAX_EDITABLE_TEXT_BYTES = 8L * 1024 * 1024
         private const val MAX_PROJECT_BYTES = 256L * 1024 * 1024
         private val SAFE_ID = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
         private val LEAN_MODULE_COMPONENT = Regex("[A-Za-z][A-Za-z0-9_]*")
@@ -74,6 +78,7 @@ class LeanProjectRepository(
         private val UNSUPPORTED_LAKE = Regex(
             "(?im)\\b(lean_exe|extern_lib|require\\s+.+\\s+from\\s+(git|\"https?://)|git|curl|wget)\\b",
         )
+        private val PROTECTED_PROJECT_FILES = setOf(METADATA, "lean-toolchain", "lakefile.toml", "lake-manifest.json")
 
         fun normalizeProjectId(name: String): String = name.trim().replace(Regex("\\s+"), "-")
 
@@ -121,13 +126,10 @@ class LeanProjectRepository(
         require(directory.isDirectory) { "Project does not exist: $id" }
         validateMetadata(directory)
         validateSupportedWorkflow(directory)
-        val sources = directory.walkTopDown()
-            .filter { it.isFile && it.extension == "lean" }
-            .map { it.relativeTo(directory).invariantSeparatorsPath }
-            .sorted()
-            .toList()
+        val files = listVisibleProjectFiles(directory)
+        val sources = files.filter { it.endsWith(".lean") }
         require(sources.isNotEmpty()) { "Project has no Lean source files" }
-        return LeanProject(id, directory, sources)
+        return LeanProject(id, directory, sources, files)
     }
 
     fun renameProject(oldId: String, newId: String): LeanProject {
@@ -149,18 +151,32 @@ class LeanProjectRepository(
     fun save(projectId: String, relativePath: String, contents: String) {
         val project = open(projectId)
         val destination = resolveContained(project.directory, relativePath)
-        require(destination.extension == "lean") { "Only Lean source files can be edited" }
-        validateLeanSourcePath(relativePath)
-        requireReconciliableLakefile(project.directory)
+        require(destination.isFile) { "Project text file does not exist: $relativePath" }
+        requireEditablePath(relativePath)
+        require(contents.toByteArray(Charsets.UTF_8).size <= MAX_EDITABLE_TEXT_BYTES) { "Project text exceeds 8 MiB: $relativePath" }
+        if (destination.extension == "lean") {
+            validateLeanSourcePath(relativePath)
+            requireReconciliableLakefile(project.directory)
+        }
         atomicWrite(destination, contents)
-        reconcileLakeConfiguration(project.directory, projectId)
+        if (destination.extension == "lean") reconcileLakeConfiguration(project.directory, projectId)
     }
 
     fun read(projectId: String, relativePath: String): String {
         val project = open(projectId)
         val source = resolveContained(project.directory, relativePath)
-        require(source.isFile && source.extension == "lean") { "Lean source does not exist: $relativePath" }
-        return source.readText()
+        require(source.isFile) { "Project text file does not exist: $relativePath" }
+        requireEditablePath(relativePath)
+        require(source.length() <= MAX_EDITABLE_TEXT_BYTES) { "Project text exceeds 8 MiB: $relativePath" }
+        val bytes = source.readBytes()
+        return try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString()
+        } catch (failure: java.nio.charset.CharacterCodingException) {
+            throw IllegalArgumentException("Project file is not valid UTF-8: $relativePath", failure)
+        }
     }
 
     /** Captures a bounded saved regular-file revision without exposing its app-private path. */
@@ -202,26 +218,31 @@ class LeanProjectRepository(
     fun createSource(projectId: String, relativePath: String, contents: String = "") : LeanProject {
         val project = open(projectId)
         val destination = resolveContained(project.directory, relativePath)
-        require(destination.extension == "lean") { "Only Lean source files can be created" }
-        validateLeanSourcePath(relativePath)
-        requireReconciliableLakefile(project.directory)
+        requireEditablePath(relativePath)
+        require(contents.toByteArray(Charsets.UTF_8).size <= MAX_EDITABLE_TEXT_BYTES) { "Project text exceeds 8 MiB: $relativePath" }
+        if (destination.extension == "lean") validateLeanSourcePath(relativePath)
+        if (destination.extension == "lean") requireReconciliableLakefile(project.directory)
         requireNoCaseFoldedCollision(project, relativePath)
         atomicWrite(destination, contents)
-        return reconcileLakeConfiguration(projectId)
+        return if (destination.extension == "lean") reconcileLakeConfiguration(projectId) else open(projectId)
     }
 
     /** Save As: creates a new source with the supplied bytes and leaves the original untouched. */
     fun copySource(projectId: String, sourcePath: String, destinationPath: String, contents: String): LeanProject {
         val project = open(projectId)
         val source = resolveContained(project.directory, sourcePath)
-        require(source.isFile && source.extension == "lean") { "Lean source does not exist: $sourcePath" }
+        require(source.isFile) { "Project text file does not exist: $sourcePath" }
         val destination = resolveContained(project.directory, destinationPath)
-        require(destination.extension == "lean") { "Only Lean source files can be created" }
-        validateLeanSourcePath(destinationPath)
-        requireReconciliableLakefile(project.directory)
+        requireEditablePath(sourcePath)
+        requireEditablePath(destinationPath)
+        require((source.extension == "lean") == (destination.extension == "lean")) {
+            "Lean source files must keep the .lean extension"
+        }
+        if (destination.extension == "lean") validateLeanSourcePath(destinationPath)
+        if (destination.extension == "lean") requireReconciliableLakefile(project.directory)
         requireNoCaseFoldedCollision(project, destinationPath)
         atomicWrite(destination, contents)
-        return reconcileLakeConfiguration(projectId)
+        return if (destination.extension == "lean") reconcileLakeConfiguration(projectId) else open(projectId)
     }
 
     fun renameSource(projectId: String, oldPath: String, newPath: String): LeanProject {
@@ -236,7 +257,9 @@ class LeanProjectRepository(
         val source = resolveContained(project.directory, oldPath)
         val destination = resolveContained(project.directory, newPath)
         require(source.exists()) { "Project entry does not exist: $oldPath" }
-        require(!source.isFile || (source.extension == "lean" && destination.extension == "lean")) {
+        requireEditablePath(oldPath)
+        requireEditablePath(newPath)
+        require(!source.isFile || ((source.extension == "lean") == (destination.extension == "lean"))) {
             "Lean source files must keep the .lean extension"
         }
         movedLeanPaths(project, oldPath, newPath).forEach(::validateLeanSourcePath)
@@ -247,9 +270,9 @@ class LeanProjectRepository(
         }
         val sourcePrefix = oldPath.trimEnd('/') + "/"
         val destinationPrefix = newPath.trimEnd('/') + "/"
-        val movedSources = project.sourceFiles.filter { it == oldPath || it.startsWith(sourcePrefix) }
+        val movedSources = project.files.filter { it == oldPath || it.startsWith(sourcePrefix) }
             .map { if (it == oldPath) newPath else destinationPrefix + it.removePrefix(sourcePrefix) }
-        val retainedFolded = project.sourceFiles.filterNot { it == oldPath || it.startsWith(sourcePrefix) }
+        val retainedFolded = project.files.filterNot { it == oldPath || it.startsWith(sourcePrefix) }
             .map(String::lowercase).toSet()
         require(movedSources.none { it.lowercase() in retainedFolded }) {
             "Project entry already exists (case-insensitive): $newPath"
@@ -277,13 +300,40 @@ class LeanProjectRepository(
         val entry = resolveContained(project.directory, relativePath)
         require(entry.exists()) { "Project entry does not exist: $relativePath" }
         val prefix = relativePath.trimEnd('/') + "/"
+        requireEditablePath(relativePath)
         val removedSources = project.sourceFiles.filter { it == relativePath || it.startsWith(prefix) }
-        require(removedSources.isNotEmpty()) { "Only folders containing Lean sources can be deleted here" }
         require(project.sourceFiles.size > removedSources.size) { "A project must keep at least one Lean source file" }
         requireReconciliableLakefile(project.directory)
         if (entry.isDirectory) deleteTree(entry) else Files.delete(entry.toPath())
         removeEmptyParents(entry.parentFile, project.directory)
         return reconcileLakeConfiguration(projectId)
+    }
+
+    private fun requireEditablePath(relativePath: String) {
+        val parts = relativePath.replace('\\', '/').split('/')
+        require(parts.none { it.isBlank() || it == "." || it == ".." || it.startsWith('.') }) {
+            "Project text path is private or invalid: $relativePath"
+        }
+        require(relativePath !in PROTECTED_PROJECT_FILES) { "Project metadata cannot be edited here: $relativePath" }
+    }
+
+    private fun listVisibleProjectFiles(directory: File): List<String> {
+        val files = mutableListOf<String>()
+        Files.walkFileTree(directory.toPath(), object : java.nio.file.SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(path: Path, attributes: BasicFileAttributes): java.nio.file.FileVisitResult {
+                if (path != directory.toPath() && (attributes.isSymbolicLink || path.fileName.toString().startsWith('.'))) {
+                    return java.nio.file.FileVisitResult.SKIP_SUBTREE
+                }
+                return java.nio.file.FileVisitResult.CONTINUE
+            }
+            override fun visitFile(path: Path, attributes: BasicFileAttributes): java.nio.file.FileVisitResult {
+                val relative = directory.toPath().relativize(path).toString().replace(File.separatorChar, '/')
+                if (attributes.isRegularFile && !attributes.isSymbolicLink && relative !in PROTECTED_PROJECT_FILES &&
+                    relative.split('/').none { it.startsWith('.') }) files += relative
+                return java.nio.file.FileVisitResult.CONTINUE
+            }
+        })
+        return files.sorted()
     }
 
     fun delete(id: String) {
@@ -547,7 +597,7 @@ class LeanProjectRepository(
                 require(!attrs.isSymbolicLink) { "Project export cannot contain symbolic links" }
                 require(attrs.isRegularFile) { "Project export may contain only regular files" }
                 val relative = project.directory.toPath().relativize(file).toString().replace(File.separatorChar, '/')
-                if (relative.endsWith(".lean") || relative == "lakefile.toml" || relative == "lean-toolchain" || relative == METADATA) {
+                if (relative in project.files || relative == "lakefile.toml" || relative == "lean-toolchain" || relative == METADATA) {
                     require(++count <= MAX_PROJECT_ENTRIES) { "Project has too many portable entries" }
                     require(attrs.size() <= MAX_PROJECT_FILE_BYTES) { "Project file exceeds 64 MiB: $relative" }
                     total += attrs.size()
@@ -580,7 +630,7 @@ class LeanProjectRepository(
 
     private fun requireNoCaseFoldedCollision(project: LeanProject, path: String, excluding: String? = null) {
         val folded = path.lowercase()
-        require(project.sourceFiles.none { it != excluding && it.lowercase() == folded }) {
+        require(project.files.none { it != excluding && it.lowercase() == folded }) {
             "Lean source already exists (case-insensitive): $path"
         }
         require(!resolveContained(project.directory, path).exists() || path == excluding) {

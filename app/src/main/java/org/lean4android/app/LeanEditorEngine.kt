@@ -130,6 +130,30 @@ private val LEAN_TOKEN_RULES = listOf(
     Regex("--[^\\n]*") to SpanStyle(color = Color(0xff6d7580)),
 )
 
+internal class PlainTextVisualTransformation(
+    private val searchQuery: String = "",
+) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText = TransformedText(
+        plainHighlightedText(text.text, searchQuery),
+        OffsetMapping.Identity,
+    )
+}
+
+internal object EditorHighlighterRegistry {
+    fun visualTransformation(
+        path: String,
+        searchQuery: String = "",
+        diagnosticRanges: List<TextRange> = emptyList(),
+    ): VisualTransformation = if (path.substringAfterLast('.', "").equals("lean", ignoreCase = true)) {
+        LeanSyntaxVisualTransformation(searchQuery, diagnosticRanges)
+    } else PlainTextVisualTransformation(searchQuery)
+}
+
+internal fun plainHighlightedText(source: String, searchQuery: String = ""): AnnotatedString = buildAnnotatedString {
+    append(source)
+    findEditorMatches(source, searchQuery).forEach { match -> addStyle(SEARCH_STYLE, match.start, match.end) }
+}
+
 private val SEARCH_STYLE = SpanStyle(
     color = Color(0xff111111),
     background = Color(0xffffd54f),
