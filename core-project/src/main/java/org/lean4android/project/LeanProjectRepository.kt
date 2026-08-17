@@ -1,6 +1,7 @@
 package org.lean4android.project
 
 import org.lean4android.process.ProcessCommand
+import org.lean4android.process.InputByteSource
 import org.lean4android.toolchain.ToolchainCommandFactory
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -9,7 +10,12 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -21,6 +27,32 @@ data class LeanProject(
     val directory: File,
     val sourceFiles: List<String>,
 )
+
+class ProjectInputRevision internal constructor(
+    val projectId: String,
+    val relativePath: String,
+    val expectedBytes: Long,
+    val sha256: String,
+    private val projectRoot: Path,
+    private val inputPath: Path,
+) {
+    /** Revalidates the saved revision and returns the exact already-open descriptor to be streamed. */
+    fun openSource(): InputByteSource {
+        requireRegularContainedPath(projectRoot, inputPath)
+        val stream = FileInputStream(inputPath.toFile())
+        try {
+            val observed = digestStream(stream)
+            require(observed.bytes == expectedBytes && observed.sha256 == sha256) {
+                "Project input changed after it was selected: $relativePath"
+            }
+            stream.channel.position(0)
+            return OpenProjectInputSource(expectedBytes, stream)
+        } catch (failure: Throwable) {
+            stream.close()
+            throw failure
+        }
+    }
+}
 
 class UnsupportedProjectException(message: String) : IllegalArgumentException(message)
 
@@ -129,6 +161,18 @@ class LeanProjectRepository(
         val source = resolveContained(project.directory, relativePath)
         require(source.isFile && source.extension == "lean") { "Lean source does not exist: $relativePath" }
         return source.readText()
+    }
+
+    /** Captures a bounded saved regular-file revision without exposing its app-private path. */
+    fun resolveInputRevision(projectId: String, relativePath: String): ProjectInputRevision {
+        val project = open(projectId)
+        val projectRoot = project.directory.toPath().toRealPath()
+        val inputPath = resolveRegularContainedPath(projectRoot, relativePath)
+        val attributes = Files.readAttributes(inputPath, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        require(attributes.size() <= MAX_PROJECT_FILE_BYTES) { "Project input exceeds 64 MiB: $relativePath" }
+        val observed = FileInputStream(inputPath.toFile()).use(::digestStream)
+        require(observed.bytes == attributes.size()) { "Project input changed while it was selected: $relativePath" }
+        return ProjectInputRevision(projectId, relativePath, observed.bytes, observed.sha256, projectRoot, inputPath)
     }
 
     fun createSource(projectId: String, relativePath: String, contents: String = "") : LeanProject {
@@ -579,4 +623,49 @@ theorem answer_is_positive : 0 < answer := by decide
 
 end $module
 """
+}
+
+private data class InputDigest(val bytes: Long, val sha256: String)
+
+private fun digestStream(input: java.io.InputStream): InputDigest {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var bytes = 0L
+    while (true) {
+        val count = input.read(buffer)
+        if (count < 0) break
+        digest.update(buffer, 0, count)
+        bytes += count
+    }
+    return InputDigest(bytes, digest.digest().joinToString("") { "%02x".format(it) })
+}
+
+private fun resolveRegularContainedPath(projectRoot: Path, relativePath: String): Path {
+    require(relativePath.isNotBlank() && !File(relativePath).isAbsolute) { "Project path must be relative" }
+    val candidate = projectRoot.resolve(relativePath).normalize()
+    require(candidate.startsWith(projectRoot) && candidate != projectRoot) { "Project path escapes its root" }
+    requireRegularContainedPath(projectRoot, candidate)
+    return candidate
+}
+
+private fun requireRegularContainedPath(projectRoot: Path, candidate: Path) {
+    require(candidate.startsWith(projectRoot) && candidate != projectRoot) { "Project path escapes its root" }
+    var current = projectRoot
+    projectRoot.relativize(candidate).forEach { component ->
+        current = current.resolve(component)
+        require(Files.exists(current, LinkOption.NOFOLLOW_LINKS)) { "Project input does not exist" }
+        val attributes = Files.readAttributes(current, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        require(!attributes.isSymbolicLink) { "Project input paths may not contain symbolic links" }
+        if (current == candidate) require(attributes.isRegularFile) { "Project input must be a regular file" }
+        else require(attributes.isDirectory) { "Project input parent must be a directory" }
+    }
+}
+
+private class OpenProjectInputSource(
+    override val expectedBytes: Long,
+    stream: FileInputStream,
+) : InputByteSource {
+    private val stream = AtomicReference<FileInputStream?>(stream)
+    override fun openStream() = checkNotNull(stream.getAndSet(null)) { "Project input source was already opened" }
+    override fun close() { stream.getAndSet(null)?.close() }
 }

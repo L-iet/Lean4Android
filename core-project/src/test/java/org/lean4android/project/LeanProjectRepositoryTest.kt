@@ -8,6 +8,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -253,6 +254,43 @@ class LeanProjectRepositoryTest {
         expectFailure("case-insensitive") {
             repository.createSource("sample", "copies/maincopy.lean")
         }
+    }
+
+    @Test fun projectInputRevisionIsBoundedHashedAndOpenedExactlyOnce() {
+        val repository = LeanProjectRepository(temporary.newFolder("input-projects"), "toolchain")
+        val project = repository.create("sample")
+        project.directory.resolve("input.txt").writeBytes("α\n".toByteArray())
+
+        val revision = repository.resolveInputRevision("sample", "input.txt")
+
+        assertEquals("sample", revision.projectId)
+        assertEquals("input.txt", revision.relativePath)
+        assertEquals(3L, revision.expectedBytes)
+        assertEquals("91bb11dcbf2e523dc5df43a5ec31662deab18be39b4b8897a106acf86a928214", revision.sha256)
+        val source = revision.openSource()
+        assertEquals("α\n", source.openStream().use { it.readBytes().toString(Charsets.UTF_8) })
+        expectFailure("already opened") { source.openStream() }
+    }
+
+    @Test fun projectInputRevisionRejectsReplacementTraversalDirectoriesLinksAndOversize() {
+        val repository = LeanProjectRepository(temporary.newFolder("input-safety"), "toolchain")
+        val project = repository.create("sample")
+        val input = project.directory.resolve("input.txt").apply { writeText("first") }
+        val revision = repository.resolveInputRevision("sample", "input.txt")
+        input.writeText("other")
+        expectFailure("changed after it was selected") { revision.openSource() }
+
+        expectFailure("escapes") { repository.resolveInputRevision("sample", "../outside") }
+        expectFailure("regular file") { repository.resolveInputRevision("sample", "Sample") }
+
+        val link = project.directory.resolve("linked.txt")
+        runCatching { Files.createSymbolicLink(link.toPath(), input.toPath()) }.onSuccess {
+            expectFailure("symbolic links") { repository.resolveInputRevision("sample", "linked.txt") }
+        }
+
+        val oversized = project.directory.resolve("oversized.bin")
+        RandomAccessFile(oversized, "rw").use { it.setLength(64L * 1024 * 1024 + 1) }
+        expectFailure("exceeds 64 MiB") { repository.resolveInputRevision("sample", "oversized.bin") }
     }
 
     @Test fun folderAndStandaloneImportsActivateOnlyValidatedCopies() {

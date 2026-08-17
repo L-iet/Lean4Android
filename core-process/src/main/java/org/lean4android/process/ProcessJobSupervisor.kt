@@ -21,9 +21,10 @@ sealed interface StdinPlan {
 }
 
 /** A validated byte revision whose implementation owns any path/descriptor details. */
-interface InputByteSource {
+interface InputByteSource : AutoCloseable {
     val expectedBytes: Long
     fun openStream(): InputStream
+    override fun close() = Unit
 }
 
 sealed interface StdinState {
