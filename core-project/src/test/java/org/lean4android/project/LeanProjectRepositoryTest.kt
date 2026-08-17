@@ -21,7 +21,8 @@ class LeanProjectRepositoryTest {
         val repository = LeanProjectRepository(root, "lean-4.32.1-android1")
         val created = repository.create("sample")
         assertEquals(listOf("Main.lean", "Sample/Basic.lean"), created.sourceFiles)
-        assertTrue(created.directory.resolve("lakefile.toml").readText().contains("roots = [\"Main\"]\nglobs = [\"Main\", \"Sample.*\"]"))
+        assertTrue(created.directory.resolve("lakefile.toml").readText().contains("roots = [\"Main\", \"Sample.Basic\"]"))
+        assertFalse(created.directory.resolve("lakefile.toml").readText().contains("globs ="))
 
         repository.save("sample", "Sample/Basic.lean", "namespace Sample\ndef answer : Nat := 41\nend Sample\n")
         val archive = temporary.root.resolve("sample.zip")
@@ -40,7 +41,8 @@ class LeanProjectRepositoryTest {
         val created = repository.create("My-Lean-Project")
         val lakefile = created.directory.resolve("lakefile.toml").readText()
         assertTrue(lakefile.contains("name = \"MyLeanProject\""))
-        assertTrue(lakefile.contains("roots = [\"Main\"]\nglobs = [\"Main\", \"MyLeanProject.*\"]"))
+        assertTrue(lakefile.contains("roots = [\"Main\", \"MyLeanProject.Basic\"]"))
+        assertFalse(lakefile.contains("globs ="))
         assertTrue(created.directory.resolve("Main.lean").readText().contains("namespace MyLeanProject.Main"))
         expectFailure("case-insensitive") { repository.create("my-lean-project") }
         expectFailure("1-64 safe filename") { repository.create("bad/name") }
@@ -62,7 +64,9 @@ class LeanProjectRepositoryTest {
             val project = repository.create(id)
             val lakefile = project.directory.resolve("lakefile.toml").readText()
             assertTrue("package identity for $id", lakefile.contains("name = \"$leanName\""))
-            assertTrue("library identity for $id", lakefile.contains("name = \"$leanName\"\nroots = [\"Main\"]\nglobs = [\"Main\", \"$leanName.*\"]"))
+            val expectedRoots = listOf("Main", "$leanName.Basic").sorted().joinToString(prefix = "[\"", separator = "\", \"", postfix = "\"]")
+            assertTrue("library identity for $id", lakefile.contains("name = \"$leanName\"\nroots = $expectedRoots"))
+            assertFalse("roots provide the default exact module globs for $id", lakefile.contains("globs ="))
             assertTrue(project.directory.resolve("Main.lean").readText().contains("namespace $leanName.Main"))
             assertTrue(project.directory.resolve("$leanName/Basic.lean").isFile)
         }
@@ -159,7 +163,7 @@ class LeanProjectRepositoryTest {
         expectFailure("at least one") { repository.deleteSource("sample", "Sample/Basic.lean") }
     }
 
-    @Test fun `lake configuration follows top level files directories and overlapping modules`() {
+    @Test fun `lake configuration enumerates exact source modules including overlapping modules`() {
         val repository = LeanProjectRepository(temporary.newFolder("projects"), "toolchain")
         val project = repository.create("sample-project")
 
@@ -169,12 +173,12 @@ class LeanProjectRepositoryTest {
         repository.createSource("sample-project", "Other/Deep/Value.lean", "def value := 1\n")
 
         val lakefile = project.directory.resolve("lakefile.toml").readText()
-        assertTrue(lakefile.contains("roots = [\"Extra\", \"Main\"]"))
-        assertTrue(lakefile.contains("globs = [\"Extra\", \"Main\", \"Extra.*\", \"Other.*\", \"SampleProject.*\"]"))
+        assertTrue(lakefile.contains("roots = [\"Extra\", \"Extra.Nested\", \"Main\", \"Other.Deep.Value\", \"SampleProject.Basic\"]"))
+        assertFalse(lakefile.contains("globs ="))
 
         repository.deleteEntry("sample-project", "Other")
         val afterDelete = project.directory.resolve("lakefile.toml").readText()
-        assertFalse(afterDelete.contains("Other.*"))
+        assertFalse(afterDelete.contains("Other.Deep.Value"))
     }
 
     @Test fun `legacy generated lake block migrates deterministically and rejects ambiguous modules`() {
@@ -187,7 +191,8 @@ class LeanProjectRepositoryTest {
 
         repository.reconcileLakeConfiguration("sample")
         val migrated = project.directory.resolve("lakefile.toml").readText()
-        assertTrue(migrated.contains("roots = [\"Main\"]\nglobs = [\"Main\", \"Sample.*\"]"))
+        assertTrue(migrated.contains("roots = [\"Main\", \"Sample.Basic\"]"))
+        assertFalse(migrated.contains("globs ="))
         val timestamp = project.directory.resolve("lakefile.toml").lastModified()
         repository.reconcileLakeConfiguration("sample")
         assertEquals(timestamp, project.directory.resolve("lakefile.toml").lastModified())
@@ -203,7 +208,8 @@ class LeanProjectRepositoryTest {
         assertTrue(lakefile.startsWith("name = \"NewName\""))
         assertTrue(lakefile.contains("defaultTargets = [\"NewName\"]"))
         assertTrue(lakefile.contains("[[lean_lib]]\nname = \"NewName\""))
-        assertTrue(lakefile.contains("globs = [\"Main\", \"OldName.*\"]"))
+        assertTrue(lakefile.contains("roots = [\"Main\", \"OldName.Basic\"]"))
+        assertFalse(lakefile.contains("globs ="))
 
         renamed.directory.resolve("lakefile.toml").appendText("\n[[lean_lib]]\nname = \"Second\"\nroots = [\"Main\"]\n")
         expectFailure("cannot be updated safely") {

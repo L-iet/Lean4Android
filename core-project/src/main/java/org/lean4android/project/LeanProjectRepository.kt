@@ -380,35 +380,23 @@ class LeanProjectRepository(
         val lakefile = directory.resolve("lakefile.toml")
         val current = lakefile.readText()
         val match = requireReconciliableLakefile(directory)
+        val sourceModules = mutableListOf<String>()
         Files.walk(directory.toPath()).use { paths ->
             paths.filter { path ->
                 Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) && path.fileName.toString().endsWith(".lean")
             }.map { directory.toPath().relativize(it).toString().replace(File.separatorChar, '/') }
-                .forEach(::validateLeanSourcePath)
+                .forEach { relative ->
+                    validateLeanSourcePath(relative)
+                    sourceModules += relative.removeSuffix(".lean").replace('/', '.')
+                }
         }
-        val roots = directory.listFiles().orEmpty()
-            .filter { it.isFile && it.extension == "lean" }
-            .map { it.nameWithoutExtension }
-            .sorted()
-        val directoryGlobs = directory.listFiles().orEmpty()
-            .filter { candidate ->
-                candidate.isDirectory && !Files.isSymbolicLink(candidate.toPath()) && !candidate.name.startsWith('.') &&
-                    Files.walk(candidate.toPath()).use { paths ->
-                        paths.anyMatch { path ->
-                            Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) && path.fileName.toString().endsWith(".lean")
-                        }
-                    }
-            }
-            .map { "${it.name}.*" }
-            .sorted()
-        val globs = roots + directoryGlobs
-        require(globs.isNotEmpty()) { "Project has no buildable Lean modules" }
+        val roots = sourceModules.distinct().sorted()
+        require(roots.isNotEmpty()) { "Project has no buildable Lean modules" }
         val module = leanName(projectId)
         val block = buildString {
             append("[[lean_lib]]\n")
             append("name = \"").append(module).append("\"\n")
-            if (roots.isNotEmpty()) append("roots = ").append(tomlArray(roots)).append('\n')
-            append("globs = ").append(tomlArray(globs)).append('\n')
+            append("roots = ").append(tomlArray(roots)).append('\n')
         }
         var canonical = current.replaceRange(match.range, block)
         canonical = canonical.replaceFirst(Regex("(?m)^name\\s*=\\s*\"[A-Za-z][A-Za-z0-9_]*\"\\s*$"), "name = \"$module\"")
@@ -452,7 +440,7 @@ class LeanProjectRepository(
     private fun defaultLakefile(id: String): String {
         val module = leanName(id)
         return "name = \"$module\"\nversion = \"0.1.0\"\ndefaultTargets = [\"$module\"]\n\n" +
-            "[[lean_lib]]\nname = \"$module\"\nroots = [\"Main\"]\nglobs = [\"Main\", \"$module.*\"]\n"
+            "[[lean_lib]]\nname = \"$module\"\nroots = [\"Main\"]\n"
     }
 
     private fun validateMetadata(directory: File) {
