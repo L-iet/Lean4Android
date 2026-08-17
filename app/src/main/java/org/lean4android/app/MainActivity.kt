@@ -106,7 +106,6 @@ import org.lean4android.process.JvmCommandRunner
 import org.lean4android.process.JvmProcessLauncher
 import org.lean4android.process.ProcessResult
 import org.lean4android.process.ProcessJobState
-import org.lean4android.process.ProcessJobSnapshot
 import org.lean4android.project.LeanProjectRepository
 import org.lean4android.toolchain.AndroidToolchainLocator
 import org.lean4android.toolchain.ToolchainCommandFactory
@@ -118,6 +117,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
 
 private const val LIBRARY_SOURCE = """namespace VisualProbe
@@ -145,7 +145,7 @@ class MainActivity : ComponentActivity() {
     private var lspBound = false
     private var jobService: ProjectJobService? = null
     private var jobBound = false
-    private var jobSnapshots by mutableStateOf<Map<Long, org.lean4android.process.ProcessJobSnapshot>>(emptyMap())
+    private var latestRunSnapshot by mutableStateOf<ProjectRunSnapshot?>(null)
     private var activeProjectId: String = EDITOR_PROJECT_ID
     private var lspUiState by mutableStateOf(LspUiState())
     @Volatile private var lspStarting = false
@@ -158,7 +158,7 @@ class MainActivity : ComponentActivity() {
     private val lspSyncRunnable = Runnable { syncLspDocuments() }
     private val goalRequestRunnables = mutableMapOf<String, Runnable>()
     private var automaticLspRestartAttempts = 0
-    private var activeRunChain: ActiveRunChain? = null
+    private var activeRunUpdate: ((EditorRunState) -> Unit)? = null
     private val archivePicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { importArchive(it) }
     }
@@ -211,16 +211,19 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    private val jobListener = ProjectJobService.Listener { snapshot ->
+    private val runListener = ProjectJobService.RunListener { snapshot ->
         runOnUiThread {
-            jobSnapshots = jobSnapshots + (snapshot.id to snapshot)
-            handleRunSnapshot(snapshot)
+            latestRunSnapshot = snapshot
+            if (snapshot.state != ProcessJobState.Running) {
+                activeRunUpdate?.invoke(snapshot.toEditorRunState())
+                activeRunUpdate = null
+            }
         }
     }
     private val jobConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             jobService = (binder as ProjectJobService.LocalBinder).service()
-            jobService?.addListener(jobListener)
+            jobService?.addRunListener(runListener)
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -278,6 +281,7 @@ class MainActivity : ComponentActivity() {
                     onSaveAs = ::saveSourceAs,
                     onCheck = ::checkLeanSource,
                     onCancel = ::cancelRun,
+                    retainedRun = latestRunSnapshot,
                     onVerifyRuntime = ::verifyRuntime,
                     projects = repository.list().map { it.id },
                     projectFiles = repository.open(activeProjectId).sourceFiles,
@@ -357,7 +361,7 @@ class MainActivity : ComponentActivity() {
             lspService = null
         }
         if (jobBound) {
-            jobService?.removeListener(jobListener)
+            jobService?.removeRunListener(runListener)
             unbindService(jobConnection)
             jobBound = false
             jobService = null
@@ -944,11 +948,10 @@ class MainActivity : ComponentActivity() {
                 if (!filesDir.resolve("projects/$activeProjectId").exists()) repository.create(activeProjectId)
                 sources.forEach { (path, source) -> repository.save(activeProjectId, path, source) }
                 val factory = ToolchainCommandFactory(layout, filesDir, cacheDir)
-                val started = TimeSource.Monotonic.markNow()
                 val buildCommand = repository.lakeBuild(factory, activeProjectId)
                 val entry = repository.open(activeProjectId).sourceFiles.firstOrNull { it == "Main.lean" }
                     ?: repository.open(activeProjectId).sourceFiles.first()
-                runOnUiThread { startBuildThenRun(buildCommand, repository.lakeLean(factory, activeProjectId, entry), entry, started, update) }
+                runOnUiThread { startBuildThenRun(buildCommand, repository.lakeLean(factory, activeProjectId, entry), entry, update) }
             }.onFailure { failure -> runOnUiThread { update(EditorRunState.Failed(failure.message ?: failure::class.java.simpleName)) } }
         }
     }
@@ -957,7 +960,6 @@ class MainActivity : ComponentActivity() {
         buildCommand: org.lean4android.process.ProcessCommand,
         runCommand: org.lean4android.process.ProcessCommand,
         entry: String,
-        started: kotlin.time.TimeMark,
         update: (EditorRunState) -> Unit,
     ) {
         val service = jobService
@@ -965,51 +967,16 @@ class MainActivity : ComponentActivity() {
             update(EditorRunState.Failed("Run service is not connected"))
             return
         }
-        activeRunChain?.activeJobId?.let(service::cancel)
-        val build = service.start(buildCommand)
-        activeRunChain = ActiveRunChain(build.id, runCommand, entry, started, update)
-        handleRunSnapshot(build)
-    }
-
-    private fun handleRunSnapshot(snapshot: ProcessJobSnapshot) {
-        val chain = activeRunChain ?: return
-        if (snapshot.id != chain.activeJobId || snapshot.state == ProcessJobState.Running) return
-        when (val state = snapshot.state) {
-            is ProcessJobState.Completed -> if (chain.buildResult == null && state.result.exitCode == 0) {
-                val service = jobService
-                if (service == null) {
-                    finishRunChain(chain, EditorRunState.Failed("Run service disconnected after build"))
-                } else {
-                    chain.buildResult = state.result
-                    val run = service.start(chain.runCommand)
-                    chain.activeJobId = run.id
-                    handleRunSnapshot(run)
-                }
-            } else if (chain.buildResult == null) {
-                finishRunChain(chain, EditorRunState.Finished(state.result, chain.started.elapsedNow()))
-            } else {
-                val build = requireNotNull(chain.buildResult)
-                finishRunChain(chain, EditorRunState.Finished(
-                    state.result.copy(
-                        stdout = build.stdout + "\nBuild completed; running ${chain.entry}\n" + state.result.stdout,
-                        stderr = build.stderr + state.result.stderr,
-                    ),
-                    chain.started.elapsedNow(),
-                ))
-            }
-            is ProcessJobState.Cancelled -> finishRunChain(chain, EditorRunState.Cancelled)
-            is ProcessJobState.Failed -> finishRunChain(chain, EditorRunState.Failed(state.message))
-            ProcessJobState.Running -> Unit
+        activeRunUpdate = update
+        val snapshot = service.startRun(buildCommand, runCommand, entry)
+        latestRunSnapshot = snapshot
+        if (snapshot.state != ProcessJobState.Running) {
+            activeRunUpdate?.invoke(snapshot.toEditorRunState())
+            activeRunUpdate = null
         }
     }
 
-    private fun finishRunChain(chain: ActiveRunChain, state: EditorRunState) {
-        if (activeRunChain !== chain) return
-        activeRunChain = null
-        chain.update(state)
-    }
-
-    private fun cancelRun() { activeRunChain?.activeJobId?.let { jobService?.cancel(it) } }
+    private fun cancelRun() { latestRunSnapshot?.id?.let { jobService?.cancelRun(it) } }
 
     private fun verifyRuntime(update: (EditorRunState) -> Unit) {
         thread(name = "lean-runtime-integrity") {
@@ -1044,14 +1011,12 @@ private sealed interface EditorRunState {
     data class Failed(val message: String) : EditorRunState
 }
 
-private data class ActiveRunChain(
-    var activeJobId: Long,
-    val runCommand: org.lean4android.process.ProcessCommand,
-    val entry: String,
-    val started: kotlin.time.TimeMark,
-    val update: (EditorRunState) -> Unit,
-    var buildResult: ProcessResult? = null,
-)
+private fun ProjectRunSnapshot.toEditorRunState(): EditorRunState = when (val value = state) {
+    ProcessJobState.Running -> EditorRunState.Running
+    is ProcessJobState.Completed -> EditorRunState.Finished(value.result, elapsedMillis.milliseconds)
+    is ProcessJobState.Cancelled -> EditorRunState.Cancelled
+    is ProcessJobState.Failed -> EditorRunState.Failed(value.message)
+}
 
 private data class LspUiState(
     val status: String = "Disconnected",
@@ -1179,6 +1144,7 @@ private fun LeanEditorScreen(
     onSaveAs: (EditorSessionState, String) -> EditorSessionState,
     onCheck: (Map<String, String>, (EditorRunState) -> Unit) -> Unit,
     onCancel: () -> Unit,
+    retainedRun: ProjectRunSnapshot?,
     onVerifyRuntime: ((EditorRunState) -> Unit) -> Unit,
     projects: List<String>,
     projectFiles: List<String>,
@@ -1259,6 +1225,12 @@ private fun LeanEditorScreen(
         }.distinct())
     }
     val running = runState == EditorRunState.Running
+    LaunchedEffect(retainedRun) {
+        retainedRun?.let {
+            runState = it.toEditorRunState()
+            outputSnapshot = formatRunState(runState)
+        }
+    }
     BackHandler(enabled = outputPopupVisible || filesMenu || moreMenu || drawerOpen || openWorkspace || settingsPage != null) {
         when (settingsPage) {
             "appearance", "editor", "interface" -> settingsPage = "settings"
