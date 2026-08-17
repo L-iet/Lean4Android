@@ -174,6 +174,7 @@ class MainActivity : ComponentActivity() {
     private val nextLspRequestId = AtomicLong(10L)
     private val pendingLspRequests = ConcurrentHashMap<Long, PendingLspRequest>()
     private val latestGoalPositions = ConcurrentHashMap<String, LspPosition>()
+    private val latestNavigationPositions = ConcurrentHashMap<String, LspPosition>()
     private val latestCompletionPositions = ConcurrentHashMap<String, LspPosition>()
     private val leanRpcSessions = ConcurrentHashMap<String, Long>()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -487,7 +488,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestGoals(path: String, text: String, offset: Int) {
-        latestGoalPositions[path] = lspPositionAt(text, offset)
+        val position = lspPositionAt(text, offset)
+        latestGoalPositions[path] = position
+        latestNavigationPositions[path] = position
         lspUiState = lspUiState.copy(
             goals = lspUiState.goals + (path to ""),
             termGoals = lspUiState.termGoals + (path to ""),
@@ -512,6 +515,11 @@ class MainActivity : ComponentActivity() {
         val uri = project.directory.resolve(path).toURI().toString()
         val version = service.documentVersion(activeProjectId, generation, uri) ?: return
         val position = lspPositionAt(text, offset)
+        if (kind in setOf(LspRequestKind.Definition, LspRequestKind.References)) {
+            latestNavigationPositions[path] = position
+        }
+        if (kind == LspRequestKind.Definition) lspUiState = lspUiState.copy(definition = null)
+        if (kind == LspRequestKind.References) lspUiState = lspUiState.copy(references = emptyList())
         val requestId = nextLspRequestId.getAndIncrement()
         pendingLspRequests.entries.removeIf { (_, pending) -> pending.kind == kind && pending.uri == uri }
         pendingLspRequests[requestId] = PendingLspRequest(generation, uri, version, path, kind, position)
@@ -583,6 +591,9 @@ class MainActivity : ComponentActivity() {
             if (pending.kind in setOf(LspRequestKind.Goals, LspRequestKind.TermGoal, LspRequestKind.InteractiveGoals) &&
                 latestGoalPositions[pending.path] != pending.position
             ) return@runOnUiThread
+            if (pending.kind in setOf(LspRequestKind.Definition, LspRequestKind.References) &&
+                latestNavigationPositions[pending.path] != pending.position
+            ) return@runOnUiThread
             when (pending.kind) {
                 LspRequestKind.Goals -> {
                     val rendered = plainGoalText(response.result).ifBlank {
@@ -612,16 +623,17 @@ class MainActivity : ComponentActivity() {
                 }
                 LspRequestKind.Definition -> {
                     val location = firstLocation(response.result)
+                    val normalized = location?.let { normalizeNavigationLocations(listOf(it)).firstOrNull() }
                     lspUiState = lspUiState.copy(
-                        definition = location?.toDefinitionTarget(),
-                        navigationMessage = location?.let { "Definition: ${it.first}:${it.second.first + 1}:${it.second.second + 1}" }
-                            ?: "No definition found",
+                        definition = normalized?.target,
+                        navigationMessage = normalized?.let { "Definition: ${it.display}" } ?: "No definition found",
                     )
                 }
                 LspRequestKind.References -> {
-                    val locations = lspLocations(response.result).take(100)
+                    val references = normalizeNavigationLocations(lspLocations(response.result))
                     lspUiState = lspUiState.copy(
-                        references = locations.map { (uri, position) -> "$uri:${position.first + 1}:${position.second + 1}" },
+                        references = references,
+                        navigationMessage = if (references.isEmpty()) "No references found" else "References: ${references.size} result(s)",
                     )
                 }
                 LspRequestKind.RpcConnect -> {
@@ -642,11 +654,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun Pair<String, Pair<Int, Int>>.toDefinitionTarget(): DefinitionTarget? {
-        val project = runCatching { editorRepository().open(activeProjectId) }.getOrNull() ?: return null
-        val file = runCatching { java.io.File(java.net.URI(first)).canonicalFile }.getOrNull() ?: return null
-        if (!file.toPath().startsWith(project.directory.canonicalFile.toPath())) return null
-        return DefinitionTarget(file.relativeTo(project.directory).invariantSeparatorsPath, second.first, second.second)
+    private fun normalizeNavigationLocations(
+        locations: List<Pair<String, Pair<Int, Int>>>,
+    ): List<NavigationLocation> {
+        val project = runCatching { editorRepository().open(activeProjectId) }.getOrNull() ?: return emptyList()
+        return normalizeNavigationLocations(project.directory, project.files.toSet(), locations)
     }
 
     private fun syncLspDocuments() {
@@ -1129,7 +1141,7 @@ private data class LspUiState(
     val completionPosition: LspPosition? = null,
     val definition: DefinitionTarget? = null,
     val navigationMessage: String = "",
-    val references: List<String> = emptyList(),
+    val references: List<NavigationLocation> = emptyList(),
 )
 
 private data class LspDiagnosticUi(
@@ -1141,7 +1153,9 @@ private data class LspDiagnosticUi(
 
 private enum class LspRequestKind { Goals, TermGoal, Hover, Completion, Definition, References, RpcConnect, InteractiveGoals }
 
-private data class DefinitionTarget(val path: String, val line: Int, val character: Int)
+internal data class DefinitionTarget(val path: String, val line: Int, val character: Int)
+
+internal data class NavigationLocation(val display: String, val target: DefinitionTarget?)
 
 private data class PendingLspRequest(
     val generation: Long,
@@ -1177,6 +1191,28 @@ internal fun lspLocations(value: JsonValue?): List<Pair<String, Pair<Int, Int>>>
         val character = (start["character"] as? JsonValue.NumberValue)?.source?.toIntOrNull() ?: return@mapNotNull null
         uri to (line to character)
     }
+}
+
+internal fun normalizeNavigationLocations(
+    projectDirectory: java.io.File,
+    visibleFiles: Set<String>,
+    locations: List<Pair<String, Pair<Int, Int>>>,
+    limit: Int = 100,
+): List<NavigationLocation> {
+    val projectRoot = runCatching { projectDirectory.canonicalFile }.getOrNull()
+    return locations.asSequence().mapNotNull { (uri, position) ->
+        val (line, character) = position
+        if (line < 0 || character < 0) return@mapNotNull null
+        val file = runCatching { java.io.File(java.net.URI(uri)).canonicalFile }.getOrNull()
+        val relative = if (projectRoot != null && file != null && file.toPath().startsWith(projectRoot.toPath())) {
+            file.relativeTo(projectRoot).invariantSeparatorsPath.takeIf { it in visibleFiles }
+        } else null
+        val target = relative?.let { DefinitionTarget(it, line, character) }
+        NavigationLocation(
+            display = relative?.let { "$it:${line + 1}:${character + 1}" } ?: "$uri:${line + 1}:${character + 1} (not navigable)",
+            target = target,
+        )
+    }.distinctBy { it.display }.sortedWith(compareBy({ it.target == null }, { it.display })).take(limit).toList()
 }
 
 private fun lspRange(value: JsonValue?): Pair<LspPosition, LspPosition>? {
@@ -1318,6 +1354,7 @@ private fun LeanEditorScreen(
     var closeDirty by remember { mutableStateOf(false) }
     var exportDirty by remember { mutableStateOf(false) }
     var settingsPage by remember { mutableStateOf<String?>(null) }
+    var referencesVisible by remember { mutableStateOf(false) }
     val fieldValues = remember {
         mutableStateMapOf<String, TextFieldValue>().apply {
             initialState.tabs.forEach { tab ->
@@ -1391,19 +1428,28 @@ private fun LeanEditorScreen(
         onLspAction(path, value.text, value.selection.start, kind)
     }
 
-    LaunchedEffect(lspUiState.definition) {
-        val target = lspUiState.definition ?: return@LaunchedEffect
-        if (target.path !in projectFiles) return@LaunchedEffect
+    fun navigateTo(target: DefinitionTarget): Boolean {
+        if (target.path !in projectFiles) return false
         val next = runCatching { onOpenSource(editor, target.path) }.getOrElse { failure ->
             runState = EditorRunState.Failed(failure.message ?: "Could not open project file")
             outputSnapshot = formatRunState(runState)
-            return@LaunchedEffect
+            return false
         }
-        val tab = next.tabs.single { it.path == target.path }
+        val tab = next.tabs.singleOrNull { it.path == target.path } ?: return false
         val offset = offsetAtLspPosition(tab.contents, LspPosition(target.line, target.character))
         fieldValues[target.path] = TextFieldValue(tab.contents, TextRange(offset))
         histories.putIfAbsent(target.path, EditorUndoHistory(tab.contents))
         publish(next.select(target.path))
+        return true
+    }
+
+    LaunchedEffect(lspUiState.definition) {
+        val target = lspUiState.definition ?: return@LaunchedEffect
+        navigateTo(target)
+    }
+
+    LaunchedEffect(lspUiState.references) {
+        if (lspUiState.references.isNotEmpty()) referencesVisible = true
     }
 
     fun buildProject(inputSelection: RunInputSelection) {
@@ -2074,6 +2120,32 @@ private fun LeanEditorScreen(
         }
     }
 
+    if (referencesVisible && lspUiState.references.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { referencesVisible = false },
+            title = { Text("References (${lspUiState.references.size})") },
+            text = {
+                Column(
+                    Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())
+                        .semantics { contentDescription = "Find references results" },
+                ) {
+                    lspUiState.references.forEach { location ->
+                        TextButton(
+                            enabled = location.target != null,
+                            onClick = {
+                                location.target?.let { if (navigateTo(it)) referencesVisible = false }
+                            },
+                            modifier = Modifier.fillMaxWidth().semantics {
+                                contentDescription = "Reference ${location.display}"
+                            },
+                        ) { Text(location.display, modifier = Modifier.fillMaxWidth()) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { referencesVisible = false }) { Text("Close") } },
+        )
+    }
+
     if (closeDirty) {
         AlertDialog(
             onDismissRequest = { closeDirty = false },
@@ -2645,8 +2717,7 @@ private fun GoalsPanel(modifier: Modifier, activePath: String?, lspUiState: LspU
                 Text(lspUiState.navigationMessage, style = MaterialTheme.typography.bodySmall)
             }
             if (lspUiState.references.isNotEmpty()) {
-                Text("References", style = style.titleStyle)
-                lspUiState.references.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                Text("References: ${lspUiState.references.size} result(s)", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

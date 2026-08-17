@@ -7,9 +7,13 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class LeanEditorEngineTest {
+    @get:Rule val temporary = TemporaryFolder()
+
     @Test fun `definition locations accept standard location and location link responses`() {
         val response = JsonValueParser.parse(
             """[{"uri":"file:///standard.lean","range":{"start":{"line":2,"character":3},"end":{"line":2,"character":4}}},{"targetUri":"file:///linked.lean","targetRange":{"start":{"line":8,"character":1},"end":{"line":8,"character":9}},"targetSelectionRange":{"start":{"line":8,"character":4},"end":{"line":8,"character":7}}}]""",
@@ -19,6 +23,29 @@ class LeanEditorEngineTest {
             listOf("file:///standard.lean" to (2 to 3), "file:///linked.lean" to (8 to 4)),
             lspLocations(response),
         )
+    }
+
+    @Test fun `navigation locations are contained visible sorted deduplicated and bounded`() {
+        val project = temporary.newFolder("navigation")
+        val main = project.resolve("Main.lean").apply { writeText("def main := true\n") }
+        val nested = project.resolve("Lib/Basic.lean").apply { parentFile!!.mkdirs(); writeText("def basic := true\n") }
+        val hidden = project.resolve(".lake/Hidden.lean").apply { parentFile!!.mkdirs(); writeText("def hidden := true\n") }
+        val external = temporary.newFile("External.lean")
+        val raw = listOf(
+            external.toURI().toString() to (1 to 2),
+            main.toURI().toString() to (4 to 5),
+            nested.toURI().toString() to (2 to 3),
+            main.toURI().toString() to (4 to 5),
+            hidden.toURI().toString() to (0 to 0),
+            main.toURI().toString() to (-1 to 0),
+        )
+
+        val results = normalizeNavigationLocations(project, setOf("Main.lean", "Lib/Basic.lean"), raw, limit = 4)
+
+        assertEquals(4, results.size)
+        assertEquals(listOf("Lib/Basic.lean:3:4", "Main.lean:5:6"), results.take(2).map { it.display })
+        assertEquals(2, results.count { it.target == null })
+        assertTrue(results.drop(2).all { it.display.endsWith("(not navigable)") })
     }
 
     @Test fun `bounded undo redo discards redo branch after new edit`() {
