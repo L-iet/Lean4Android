@@ -43,6 +43,7 @@ class ProcessJobSupervisor(
     private val outputLimitBytes: Int = 1024 * 1024,
     stdinPlan: StdinPlan = StdinPlan.ImmediateEof,
     private val pendingInputLimitBytes: Int = 64 * 1024,
+    private val onInputChanged: (StdinState) -> Unit = {},
     private val onChanged: (ProcessJobState) -> Unit = {},
 ) : AutoCloseable {
     private val process = launcher.start(command)
@@ -101,6 +102,7 @@ class ProcessJobSupervisor(
             acceptedInputBytes += content.size
             pendingInputBytes += content.size
             stdinState = StdinState.Open(acceptedInputBytes, pendingInputBytes)
+            onInputChanged(stdinState)
             inputLock.notifyAll()
             return InputOperationResult.Accepted(content.size)
         }
@@ -111,6 +113,7 @@ class ProcessJobSupervisor(
             if (inputCloseRequested) return InputOperationResult.AlreadyClosed
             inputCloseRequested = true
             stdinState = StdinState.Closed(reason)
+            onInputChanged(stdinState)
             inputLock.notifyAll()
             return InputOperationResult.Accepted(0)
         }
@@ -134,6 +137,7 @@ class ProcessJobSupervisor(
                     if (inputQueue.isEmpty()) null else inputQueue.removeFirst().also {
                         pendingInputBytes -= it.size
                         if (!inputCloseRequested) stdinState = StdinState.Open(acceptedInputBytes, pendingInputBytes)
+                        if (!inputCloseRequested) onInputChanged(stdinState)
                     }
                 } ?: break
                 process.standardInput.write(next)
@@ -144,6 +148,7 @@ class ProcessJobSupervisor(
             synchronized(inputLock) {
                 inputCloseRequested = true
                 stdinState = StdinState.Closed(StdinState.CloseReason.Failed)
+                onInputChanged(stdinState)
             }
         }
     }

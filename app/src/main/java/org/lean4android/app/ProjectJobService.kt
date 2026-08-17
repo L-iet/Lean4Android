@@ -9,6 +9,8 @@ import org.lean4android.process.ProcessCommand
 import org.lean4android.process.ProcessJobSnapshot
 import org.lean4android.process.ProcessJobState
 import org.lean4android.process.ProcessJobSupervisor
+import org.lean4android.process.StdinPlan
+import org.lean4android.process.InputOperationResult
 import java.util.concurrent.CopyOnWriteArraySet
 
 /** Reconnectable owner for user-triggered Lean/Lake jobs. */
@@ -29,16 +31,35 @@ class ProjectJobService : Service() {
     }
     fun removeListener(listener: Listener) { listeners -= listener }
 
-    @Synchronized fun snapshots(): List<ProcessJobSnapshot> = jobs.map { (id, job) -> ProcessJobSnapshot(id, job.state) }
+    @Synchronized fun snapshots(): List<ProcessJobSnapshot> = jobs.map { (id, job) -> snapshot(id, job) }
 
-    fun start(command: ProcessCommand): ProcessJobSnapshot {
+    fun start(command: ProcessCommand, stdinPlan: StdinPlan = StdinPlan.ImmediateEof): ProcessJobSnapshot {
         val id = synchronized(this) { nextId++ }
-        val supervisor = ProcessJobSupervisor(command, JvmProcessLauncher()) { state -> notify(ProcessJobSnapshot(id, state)) }
+        var owned: ProcessJobSupervisor? = null
+        val supervisor = ProcessJobSupervisor(
+            command,
+            JvmProcessLauncher(),
+            stdinPlan = stdinPlan,
+            onInputChanged = { owned?.let { notify(snapshot(id, it)) } },
+        ) { owned?.let { notify(snapshot(id, it)) } }
+        owned = supervisor
         synchronized(this) { jobs[id] = supervisor }
-        return ProcessJobSnapshot(id, ProcessJobState.Running).also(::notify)
+        return snapshot(id, supervisor).also(::notify)
     }
 
     fun cancel(id: Long): Boolean = synchronized(this) { jobs[id] }?.cancel() ?: false
+
+    fun send(id: Long, text: String, appendLf: Boolean): InputOperationResult {
+        val supervisor = synchronized(this) { jobs[id] }
+            ?: return InputOperationResult.Rejected("Unknown job")
+        return supervisor.send(text, appendLf).also { notify(snapshot(id, supervisor)) }
+    }
+
+    fun closeInput(id: Long): InputOperationResult {
+        val supervisor = synchronized(this) { jobs[id] }
+            ?: return InputOperationResult.Rejected("Unknown job")
+        return supervisor.closeInput().also { notify(snapshot(id, supervisor)) }
+    }
 
     override fun onDestroy() {
         synchronized(this) { jobs.values.toList().also { jobs.clear() } }.forEach(ProcessJobSupervisor::close)
@@ -47,4 +68,7 @@ class ProjectJobService : Service() {
     }
 
     private fun notify(snapshot: ProcessJobSnapshot) = listeners.forEach { it.onJobChanged(snapshot) }
+
+    private fun snapshot(id: Long, supervisor: ProcessJobSupervisor) =
+        ProcessJobSnapshot(id, supervisor.state, supervisor.stdinState)
 }
