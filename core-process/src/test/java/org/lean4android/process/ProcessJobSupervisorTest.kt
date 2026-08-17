@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import java.io.File
 import kotlin.time.Duration
 
@@ -28,6 +29,31 @@ class ProcessJobSupervisorTest {
         assertTrue(job.state is ProcessJobState.Cancelled)
     }
 
+    @Test fun immediateEofIsTheDefault() {
+        val input = TrackingOutputStream()
+        val process = FakeRunningProcess("", "", exit = 0, input = input, waitUntilInputClosed = true)
+        val job = ProcessJobSupervisor(command(), ProcessLauncher { process })
+        awaitStopped(job)
+        assertTrue(input.closed)
+        assertEquals(StdinState.Closed(StdinState.CloseReason.ImmediateEof), job.stdinState)
+    }
+
+    @Test fun interactiveInputIsOrderedBoundedAndClosedExplicitly() {
+        val input = TrackingOutputStream()
+        val process = FakeRunningProcess("", "", exit = 0, input = input, waitUntilInputClosed = true)
+        val job = ProcessJobSupervisor(
+            command(), ProcessLauncher { process }, stdinPlan = StdinPlan.Interactive,
+            pendingInputLimitBytes = 8,
+        )
+        assertEquals(InputOperationResult.Accepted(3), job.send("α", appendLf = true))
+        assertEquals(InputOperationResult.Rejected("Input is still being delivered"), job.send("123456789"))
+        assertEquals(InputOperationResult.Accepted(0), job.closeInput())
+        awaitStopped(job)
+        assertEquals("α\n", input.bytes.toString(Charsets.UTF_8.name()))
+        assertEquals(StdinState.Closed(StdinState.CloseReason.UserEof), job.stdinState)
+        assertEquals(InputOperationResult.AlreadyClosed, job.send("late"))
+    }
+
     private fun awaitStopped(job: ProcessJobSupervisor) {
         repeat(100) {
             if (job.state != ProcessJobState.Running) return
@@ -43,17 +69,28 @@ class ProcessJobSupervisorTest {
         stderr: String,
         private val exit: Int,
         private val waitUntilTerminated: Boolean = false,
+        private val input: OutputStream = ByteArrayOutputStream(),
+        private val waitUntilInputClosed: Boolean = false,
     ) : RunningProcess {
-        override val standardInput = ByteArrayOutputStream()
+        override val standardInput = input
         override val standardOutput = ByteArrayInputStream(stdout.toByteArray())
         override val standardError = ByteArrayInputStream(stderr.toByteArray())
         @Volatile var terminated = false
         override val isAlive get() = !terminated
         override fun awaitExit(timeout: Duration): Int? {
             while (waitUntilTerminated && !terminated) Thread.sleep(5)
+            while (waitUntilInputClosed && !(input as TrackingOutputStream).closed) Thread.sleep(5)
             return exit
         }
         override fun terminate(gracePeriod: Duration): Int { terminated = true; return exit }
         override fun close() { terminated = true }
+    }
+
+    private class TrackingOutputStream : OutputStream() {
+        val bytes = ByteArrayOutputStream()
+        @Volatile var closed = false
+        override fun write(value: Int) = bytes.write(value)
+        override fun write(buffer: ByteArray, offset: Int, length: Int) = bytes.write(buffer, offset, length)
+        override fun close() { closed = true }
     }
 }
