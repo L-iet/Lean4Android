@@ -85,6 +85,7 @@ class ProjectJobService : Service() {
         entry: String,
         stdinPlan: StdinPlan = StdinPlan.ImmediateEof,
     ): ProjectRunSnapshot {
+        startService(Intent(this, ProjectJobService::class.java))
         val runId = synchronized(this) { nextRunId++ }
         val build = start(buildCommand, StdinPlan.ImmediateEof)
         val sequence = ProjectRunSequence(
@@ -135,8 +136,8 @@ class ProjectJobService : Service() {
     }
 
     override fun onDestroy() {
-        synchronized(this) { jobs.values.toList().also { jobs.clear() } }.forEach(ProcessJobSupervisor::close)
-        synchronized(this) { runs.clear() }
+        synchronized(this) { jobs.values.toList() }.forEach(ProcessJobSupervisor::close)
+        synchronized(this) { jobs.clear(); runs.clear() }
         listeners.clear()
         runListeners.clear()
         super.onDestroy()
@@ -169,6 +170,7 @@ class ProjectJobService : Service() {
             is ProcessJobState.Failed -> sequence.terminalState = state
         }
         notifyRun(synchronized(this) { runSnapshot(sequence) })
+        if (sequence.terminalState != null && synchronized(this) { runs.values.none { it.terminalState == null } }) stopSelf()
     }
 
     private fun runSnapshot(sequence: ProjectRunSequence): ProjectRunSnapshot {

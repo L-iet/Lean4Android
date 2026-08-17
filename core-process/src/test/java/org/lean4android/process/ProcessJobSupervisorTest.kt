@@ -5,6 +5,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.io.File
 import kotlin.time.Duration
@@ -26,6 +28,18 @@ class ProcessJobSupervisorTest {
         assertTrue(job.cancel())
         awaitStopped(job)
         assertTrue(process.terminated)
+        assertTrue(job.state is ProcessJobState.Cancelled)
+    }
+
+    @Test fun cancellationContainsInterruptedDrainReads() {
+        val output = InterruptingInputStream()
+        val process = FakeRunningProcess("", "", exit = 143, waitUntilTerminated = true, stdoutInput = output)
+        val job = ProcessJobSupervisor(command(), ProcessLauncher { process })
+
+        assertTrue(job.cancel())
+        awaitStopped(job)
+
+        assertTrue(output.closed)
         assertTrue(job.state is ProcessJobState.Cancelled)
     }
 
@@ -71,10 +85,12 @@ class ProcessJobSupervisorTest {
         private val waitUntilTerminated: Boolean = false,
         private val input: OutputStream = ByteArrayOutputStream(),
         private val waitUntilInputClosed: Boolean = false,
+        stdoutInput: InputStream? = null,
+        stderrInput: InputStream? = null,
     ) : RunningProcess {
         override val standardInput = input
-        override val standardOutput = ByteArrayInputStream(stdout.toByteArray())
-        override val standardError = ByteArrayInputStream(stderr.toByteArray())
+        override val standardOutput = stdoutInput ?: ByteArrayInputStream(stdout.toByteArray())
+        override val standardError = stderrInput ?: ByteArrayInputStream(stderr.toByteArray())
         @Volatile var terminated = false
         override val isAlive get() = !terminated
         override fun awaitExit(timeout: Duration): Int? {
@@ -82,7 +98,12 @@ class ProcessJobSupervisorTest {
             while (waitUntilInputClosed && !(input as TrackingOutputStream).closed) Thread.sleep(5)
             return exit
         }
-        override fun terminate(gracePeriod: Duration): Int { terminated = true; return exit }
+        override fun terminate(gracePeriod: Duration): Int {
+            terminated = true
+            standardOutput.close()
+            standardError.close()
+            return exit
+        }
         override fun close() { terminated = true }
     }
 
@@ -91,6 +112,15 @@ class ProcessJobSupervisorTest {
         @Volatile var closed = false
         override fun write(value: Int) = bytes.write(value)
         override fun write(buffer: ByteArray, offset: Int, length: Int) = bytes.write(buffer, offset, length)
+        override fun close() { closed = true }
+    }
+
+    private class InterruptingInputStream : InputStream() {
+        @Volatile var closed = false
+        override fun read(): Int {
+            while (!closed) Thread.sleep(5)
+            throw InterruptedIOException("read interrupted")
+        }
         override fun close() { closed = true }
     }
 }

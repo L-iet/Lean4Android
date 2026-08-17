@@ -1,7 +1,9 @@
 package org.lean4android.process
 
 import java.io.InputStream
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.time.Duration.Companion.days
 
@@ -48,6 +50,7 @@ class ProcessJobSupervisor(
 ) : AutoCloseable {
     private val process = launcher.start(command)
     private val cancelled = AtomicBoolean(false)
+    private val drainFailure = AtomicReference<String?>(null)
     private val stdout = BoundedOutput(outputLimitBytes)
     private val stderr = BoundedOutput(outputLimitBytes)
     private val stdoutThread = drain("lean-job-stdout", process.standardOutput, stdout)
@@ -78,7 +81,8 @@ class ProcessJobSupervisor(
             stdoutThread.join()
             stderrThread.join()
             if (cancelled.get()) ProcessJobState.Cancelled(stdout.text(), stderr.text())
-            else ProcessJobState.Completed(ProcessResult(exit, stdout.text(), stderr.text(), false))
+            else drainFailure.get()?.let { ProcessJobState.Failed("Could not read process output: $it") }
+                ?: ProcessJobState.Completed(ProcessResult(exit, stdout.text(), stderr.text(), false))
         }.getOrElse { ProcessJobState.Failed(it.message ?: it::class.java.simpleName) }
             .also(::publish)
     }
@@ -159,13 +163,17 @@ class ProcessJobSupervisor(
     }
 
     private fun drain(name: String, input: InputStream, output: BoundedOutput) = thread(name = name, isDaemon = true) {
-        input.use {
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val count = it.read(buffer)
-                if (count < 0) break
-                output.append(buffer, count)
+        try {
+            input.use {
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val count = it.read(buffer)
+                    if (count < 0) break
+                    output.append(buffer, count)
+                }
             }
+        } catch (failure: IOException) {
+            if (!cancelled.get()) drainFailure.compareAndSet(null, failure.message ?: failure::class.java.simpleName)
         }
     }
 }
