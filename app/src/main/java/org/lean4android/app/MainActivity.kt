@@ -143,6 +143,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var editorState: EditorSessionState
     private var lspService: LeanLspService? = null
     private var lspBound = false
+    private var jobService: ProjectJobService? = null
+    private var jobBound = false
+    private var jobSnapshots by mutableStateOf<Map<Long, org.lean4android.process.ProcessJobSnapshot>>(emptyMap())
     private var activeProjectId: String = EDITOR_PROJECT_ID
     private var lspUiState by mutableStateOf(LspUiState())
     @Volatile private var lspStarting = false
@@ -206,6 +209,19 @@ class MainActivity : ComponentActivity() {
             if (stopped != null && stopped.reason != org.lean4android.lsp.LeanLspSupervisor.StopReason.Closed) {
                 scheduleAutomaticLspRestart(snapshot.generation)
             }
+        }
+    }
+    private val jobListener = ProjectJobService.Listener { snapshot ->
+        runOnUiThread { jobSnapshots = jobSnapshots + (snapshot.id to snapshot) }
+    }
+    private val jobConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            jobService = (binder as ProjectJobService.LocalBinder).service()
+            jobService?.addListener(jobListener)
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            jobService = null
         }
     }
 
@@ -323,6 +339,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         lspBound = bindService(Intent(this, LeanLspService::class.java), lspConnection, Context.BIND_AUTO_CREATE)
+        jobBound = bindService(Intent(this, ProjectJobService::class.java), jobConnection, Context.BIND_AUTO_CREATE)
     }
 
     override fun onStop() {
@@ -335,6 +352,12 @@ class MainActivity : ComponentActivity() {
             unbindService(lspConnection)
             lspBound = false
             lspService = null
+        }
+        if (jobBound) {
+            jobService?.removeListener(jobListener)
+            unbindService(jobConnection)
+            jobBound = false
+            jobService = null
         }
         super.onStop()
     }
