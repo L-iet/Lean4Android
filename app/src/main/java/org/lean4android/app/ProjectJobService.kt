@@ -15,12 +15,24 @@ import java.util.concurrent.CopyOnWriteArraySet
 
 enum class ProjectRunPhase { Build, Program }
 
+sealed interface ProjectRunInput {
+    data object ImmediateEof : ProjectRunInput
+    data object Interactive : ProjectRunInput
+    data class ProjectFile(
+        val relativePath: String,
+        val expectedBytes: Long,
+        val sha256: String,
+        val usesSavedVersion: Boolean,
+    ) : ProjectRunInput
+}
+
 data class ProjectRunSnapshot(
     val id: Long,
     val phase: ProjectRunPhase,
     val activeJob: ProcessJobSnapshot,
     val state: ProcessJobState,
     val elapsedMillis: Long,
+    val input: ProjectRunInput,
 )
 
 private data class ProjectRunSequence(
@@ -30,6 +42,7 @@ private data class ProjectRunSequence(
     val runCommand: ProcessCommand,
     val entry: String,
     val stdinPlan: StdinPlan,
+    val input: ProjectRunInput,
     val startedMillis: Long,
     var buildResult: org.lean4android.process.ProcessResult? = null,
     var terminalState: ProcessJobState? = null,
@@ -84,10 +97,24 @@ class ProjectJobService : Service() {
         runCommand: ProcessCommand,
         entry: String,
         stdinPlan: StdinPlan = StdinPlan.ImmediateEof,
+        input: ProjectRunInput? = null,
     ): ProjectRunSnapshot {
         startService(Intent(this, ProjectJobService::class.java))
         val runId = synchronized(this) { nextRunId++ }
-        val build = start(buildCommand, StdinPlan.ImmediateEof)
+        val runInput = try {
+            input ?: defaultRunInput(stdinPlan)
+        } catch (failure: Throwable) {
+            closeRunStdinPlan(stdinPlan)
+            stopSelf()
+            throw failure
+        }
+        val build = try {
+            start(buildCommand, StdinPlan.ImmediateEof)
+        } catch (failure: Throwable) {
+            closeRunStdinPlan(stdinPlan)
+            stopSelf()
+            throw failure
+        }
         val sequence = ProjectRunSequence(
             id = runId,
             phase = ProjectRunPhase.Build,
@@ -95,6 +122,7 @@ class ProjectJobService : Service() {
             runCommand = runCommand,
             entry = entry,
             stdinPlan = stdinPlan,
+            input = runInput,
             startedMillis = android.os.SystemClock.elapsedRealtime(),
         )
         synchronized(this) { runs[runId] = sequence }
@@ -137,6 +165,7 @@ class ProjectJobService : Service() {
 
     override fun onDestroy() {
         synchronized(this) { jobs.values.toList() }.forEach(ProcessJobSupervisor::close)
+        synchronized(this) { runs.values.map(ProjectRunSequence::stdinPlan) }.forEach(::closeRunStdinPlan)
         synchronized(this) { jobs.clear(); runs.clear() }
         listeners.clear()
         runListeners.clear()
@@ -155,7 +184,15 @@ class ProjectJobService : Service() {
             ProcessJobState.Running -> Unit
             is ProcessJobState.Completed -> if (sequence.phase == ProjectRunPhase.Build && state.result.exitCode == 0) {
                 sequence.buildResult = state.result
-                val program = start(sequence.runCommand, sequence.stdinPlan)
+                val program = try {
+                    start(sequence.runCommand, sequence.stdinPlan)
+                } catch (failure: Throwable) {
+                    sequence.terminalState = ProcessJobState.Failed(failure.message ?: failure::class.java.simpleName)
+                    closeRunStdinPlan(sequence.stdinPlan)
+                    notifyRun(runSnapshot(sequence))
+                    if (runs.values.none { it.terminalState == null }) stopSelf()
+                    return
+                }
                 synchronized(this) {
                     sequence.phase = ProjectRunPhase.Program
                     sequence.activeJobId = program.id
@@ -169,6 +206,7 @@ class ProjectJobService : Service() {
             is ProcessJobState.Cancelled -> sequence.terminalState = state
             is ProcessJobState.Failed -> sequence.terminalState = state
         }
+        if (sequence.terminalState != null) closeRunStdinPlan(sequence.stdinPlan)
         notifyRun(synchronized(this) { runSnapshot(sequence) })
         if (sequence.terminalState != null && synchronized(this) { runs.values.none { it.terminalState == null } }) stopSelf()
     }
@@ -181,6 +219,7 @@ class ProjectJobService : Service() {
             activeJob = snapshot(sequence.activeJobId, job),
             state = sequence.terminalState ?: ProcessJobState.Running,
             elapsedMillis = android.os.SystemClock.elapsedRealtime() - sequence.startedMillis,
+            input = sequence.input,
         )
     }
 
@@ -188,6 +227,16 @@ class ProjectJobService : Service() {
 
     private fun snapshot(id: Long, supervisor: ProcessJobSupervisor) =
         ProcessJobSnapshot(id, supervisor.state, supervisor.stdinState)
+}
+
+internal fun defaultRunInput(plan: StdinPlan): ProjectRunInput = when (plan) {
+    StdinPlan.ImmediateEof -> ProjectRunInput.ImmediateEof
+    StdinPlan.Interactive -> ProjectRunInput.Interactive
+    is StdinPlan.Bytes -> error("Project-file stdin requires selected revision metadata")
+}
+
+internal fun closeRunStdinPlan(plan: StdinPlan) {
+    if (plan is StdinPlan.Bytes) runCatching { plan.source.close() }
 }
 
 internal fun combineProjectRunResult(

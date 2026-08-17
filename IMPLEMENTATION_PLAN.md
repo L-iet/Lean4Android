@@ -510,8 +510,9 @@ Exit: definition and reference requests navigate directly to valid contained pro
 
 - Add **Settings → Editor** controls to show or hide the symbol row and customize its ordered contents, with validated persistence, restore-defaults behavior, accessible labels, and a supported maximum of 60 entries. Preserve horizontal scrolling and cursor/selection-aware insertion.
 - Add independently persisted editor-font and interface-font choices from documented fixed ranges. Apply changes immediately and revalidate pane clamping, tabs, dialogs, drawer reachability, line-number alignment, accessibility scaling, IME behavior, and configuration/process recreation.
+- After the higher-priority M5.1/M5.2 work and preference controls, add a low-priority **Settings → About** screen with copyable, truthful runtime identity: app version name/code, application/package and build variant, active immutable toolchain ID/schema, and the actual available Lean and Lake versions reported by the installed pinned executables. Show unavailable/probe failures explicitly rather than substituting build-time assumptions. Validate the screen independently in the production Android1 app and the isolated Android2 candidate so the two installations are immediately distinguishable.
 
-Exit: symbol-row visibility/content and both font-size settings are durable, bounded, accessible, and usable across supported phone/tablet layouts without regressing editing or pane reachability.
+Exit: symbol-row visibility/content and both font-size settings are durable, bounded, accessible, and usable across supported phone/tablet layouts without regressing editing or pane reachability; About accurately identifies both Android1 and Android2 installations and their active Lean/Lake toolchains.
 
 ### M6 — Hardening and beta release (3–5 weeks)
 
