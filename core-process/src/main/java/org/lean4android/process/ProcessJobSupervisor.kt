@@ -17,13 +17,22 @@ sealed interface ProcessJobState {
 sealed interface StdinPlan {
     data object ImmediateEof : StdinPlan
     data object Interactive : StdinPlan
+    data class Bytes(val source: InputByteSource) : StdinPlan
+}
+
+/** A validated byte revision whose implementation owns any path/descriptor details. */
+interface InputByteSource {
+    val expectedBytes: Long
+    fun openStream(): InputStream
 }
 
 sealed interface StdinState {
     data class Open(val acceptedBytes: Long, val pendingBytes: Int) : StdinState
+    data class Streaming(val sentBytes: Long, val totalBytes: Long) : StdinState
+    data class Failed(val sentBytes: Long, val totalBytes: Long, val message: String) : StdinState
     data class Closed(val reason: CloseReason) : StdinState
 
-    enum class CloseReason { ImmediateEof, UserEof, Cancelled, ProcessExited, Failed }
+    enum class CloseReason { ImmediateEof, TransferComplete, UserEof, Cancelled, ProcessExited, Failed }
 }
 
 data class ProcessJobSnapshot(
@@ -51,6 +60,7 @@ class ProcessJobSupervisor(
     private val process = launcher.start(command)
     private val cancelled = AtomicBoolean(false)
     private val drainFailure = AtomicReference<String?>(null)
+    private val activeInputSource = AtomicReference<InputStream?>(null)
     private val stdout = BoundedOutput(outputLimitBytes)
     private val stderr = BoundedOutput(outputLimitBytes)
     private val stdoutThread = drain("lean-job-stdout", process.standardOutput, stdout)
@@ -63,6 +73,9 @@ class ProcessJobSupervisor(
     private var inputCloseRequested = stdinPlan == StdinPlan.ImmediateEof
     @Volatile var stdinState: StdinState = if (stdinPlan == StdinPlan.ImmediateEof) {
         StdinState.Closed(StdinState.CloseReason.ImmediateEof)
+    } else if (stdinPlan is StdinPlan.Bytes) {
+        require(stdinPlan.source.expectedBytes >= 0) { "Expected input byte count must be non-negative" }
+        StdinState.Streaming(0, stdinPlan.source.expectedBytes)
     } else StdinState.Open(0, 0)
         private set
     private val inputThread = thread(name = "lean-job-stdin", isDaemon = true) { writeInput(stdinPlan) }
@@ -90,6 +103,7 @@ class ProcessJobSupervisor(
     fun cancel(): Boolean {
         if (state != ProcessJobState.Running || !cancelled.compareAndSet(false, true)) return false
         closeInput(StdinState.CloseReason.Cancelled)
+        runCatching { activeInputSource.getAndSet(null)?.close() }
         process.terminate()
         return true
     }
@@ -134,6 +148,10 @@ class ProcessJobSupervisor(
             runCatching { process.standardInput.close() }
             return
         }
+        if (plan is StdinPlan.Bytes) {
+            streamInput(plan.source)
+            return
+        }
         try {
             while (true) {
                 val next = synchronized(inputLock) {
@@ -154,6 +172,61 @@ class ProcessJobSupervisor(
                 stdinState = StdinState.Closed(StdinState.CloseReason.Failed)
                 onInputChanged(stdinState)
             }
+        }
+    }
+
+    private fun streamInput(source: InputByteSource) {
+        var sent = 0L
+        val total = source.expectedBytes
+        try {
+            val opened = source.openStream()
+            if (!activeInputSource.compareAndSet(null, opened)) {
+                opened.close()
+                throw IOException("Input source is already open")
+            }
+            if (cancelled.get()) {
+                activeInputSource.getAndSet(null)?.close()
+                return
+            }
+            opened.use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (cancelled.get()) return
+                    if (sent + count > total) throw IOException("Input revision is longer than the selected $total bytes")
+                    process.standardInput.write(buffer, 0, count)
+                    process.standardInput.flush()
+                    sent += count
+                    synchronized(inputLock) {
+                        if (!inputCloseRequested) {
+                            stdinState = StdinState.Streaming(sent, total)
+                            onInputChanged(stdinState)
+                        }
+                    }
+                }
+            }
+            activeInputSource.compareAndSet(opened, null)
+            if (sent != total) throw IOException("Input revision ended after $sent of $total bytes")
+            synchronized(inputLock) {
+                if (inputCloseRequested) return
+                inputCloseRequested = true
+                stdinState = StdinState.Closed(StdinState.CloseReason.TransferComplete)
+                onInputChanged(stdinState)
+            }
+            process.standardInput.close()
+        } catch (failure: Exception) {
+            activeInputSource.getAndSet(null)?.let { runCatching { it.close() } }
+            if (cancelled.get()) return
+            val message = failure.message ?: failure::class.java.simpleName
+            synchronized(inputLock) {
+                inputCloseRequested = true
+                stdinState = StdinState.Failed(sent, total, message)
+                onInputChanged(stdinState)
+            }
+            cancelled.set(true)
+            runCatching { process.standardInput.close() }
+            process.terminate()
         }
     }
 

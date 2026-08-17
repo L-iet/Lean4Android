@@ -7,6 +7,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.InterruptedIOException
+import java.io.IOException
 import java.io.OutputStream
 import java.io.File
 import kotlin.time.Duration
@@ -68,6 +69,101 @@ class ProcessJobSupervisorTest {
         assertEquals(InputOperationResult.AlreadyClosed, job.send("late"))
     }
 
+    @Test fun projectBytesStreamInBoundedChunksAndCloseOnExactRevision() {
+        val bytes = ByteArray(DEFAULT_BUFFER_SIZE * 2 + 7) { (it % 251).toByte() }
+        val input = TrackingOutputStream()
+        val states = mutableListOf<StdinState>()
+        val process = FakeRunningProcess("", "", exit = 0, input = input, waitUntilInputClosed = true)
+        val job = ProcessJobSupervisor(
+            command(), ProcessLauncher { process },
+            stdinPlan = StdinPlan.Bytes(ByteArraySource(bytes)),
+            onInputChanged = { synchronized(states) { states += it } },
+        )
+
+        awaitStopped(job)
+
+        assertTrue(input.bytes.toByteArray().contentEquals(bytes))
+        assertEquals(StdinState.Closed(StdinState.CloseReason.TransferComplete), job.stdinState)
+        assertTrue(states.filterIsInstance<StdinState.Streaming>().size >= 3)
+        assertEquals(ProcessJobState.Completed(ProcessResult(0, "", "", false)), job.state)
+    }
+
+    @Test fun emptyProjectBytesCloseAsCompletedTransfer() {
+        val input = TrackingOutputStream()
+        val process = FakeRunningProcess("", "", exit = 0, input = input, waitUntilInputClosed = true)
+        val job = ProcessJobSupervisor(
+            command(), ProcessLauncher { process },
+            stdinPlan = StdinPlan.Bytes(ByteArraySource(byteArrayOf())),
+        )
+
+        awaitStopped(job)
+
+        assertEquals(0, input.bytes.size())
+        assertEquals(StdinState.Closed(StdinState.CloseReason.TransferComplete), job.stdinState)
+    }
+
+    @Test fun shortProjectByteRevisionFailsInputAndCancelsChild() {
+        val input = TrackingOutputStream()
+        val process = FakeRunningProcess("", "", exit = 143, input = input, waitUntilTerminated = true)
+        val source = object : InputByteSource {
+            override val expectedBytes = 5L
+            override fun openStream() = ByteArrayInputStream(byteArrayOf(1, 2, 3))
+        }
+        val job = ProcessJobSupervisor(command(), ProcessLauncher { process }, stdinPlan = StdinPlan.Bytes(source))
+
+        awaitStopped(job)
+
+        assertTrue(process.terminated)
+        assertTrue(job.state is ProcessJobState.Cancelled)
+        val failure = job.stdinState as StdinState.Failed
+        assertEquals(3, failure.sentBytes)
+        assertEquals(5, failure.totalBytes)
+        assertTrue(failure.message.contains("3 of 5"))
+    }
+
+    @Test fun projectByteReadFailureCancelsChildWithoutHidingProgress() {
+        val input = TrackingOutputStream()
+        val process = FakeRunningProcess("", "", exit = 143, input = input, waitUntilTerminated = true)
+        val source = object : InputByteSource {
+            override val expectedBytes = 4L
+            override fun openStream() = object : InputStream() {
+                private var emitted = false
+                override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                    if (emitted) throw IOException("fixture read failure")
+                    emitted = true
+                    buffer[offset] = 7
+                    return 1
+                }
+                override fun read(): Int = error("bulk read expected")
+            }
+        }
+        val job = ProcessJobSupervisor(command(), ProcessLauncher { process }, stdinPlan = StdinPlan.Bytes(source))
+
+        awaitStopped(job)
+
+        assertTrue(process.terminated)
+        val failure = job.stdinState as StdinState.Failed
+        assertEquals(1, failure.sentBytes)
+        assertTrue(failure.message.contains("fixture read failure"))
+    }
+
+    @Test fun cancellationClosesAProjectSourceBlockedDuringTransfer() {
+        val sourceInput = InterruptingInputStream()
+        val process = FakeRunningProcess("", "", exit = 143, waitUntilTerminated = true)
+        val source = object : InputByteSource {
+            override val expectedBytes = 1L
+            override fun openStream() = sourceInput
+        }
+        val job = ProcessJobSupervisor(command(), ProcessLauncher { process }, stdinPlan = StdinPlan.Bytes(source))
+
+        assertTrue(job.cancel())
+        awaitStopped(job)
+
+        assertTrue(sourceInput.closed)
+        assertTrue(process.terminated)
+        assertTrue(job.state is ProcessJobState.Cancelled)
+    }
+
     private fun awaitStopped(job: ProcessJobSupervisor) {
         repeat(100) {
             if (job.state != ProcessJobState.Running) return
@@ -113,6 +209,11 @@ class ProcessJobSupervisorTest {
         override fun write(value: Int) = bytes.write(value)
         override fun write(buffer: ByteArray, offset: Int, length: Int) = bytes.write(buffer, offset, length)
         override fun close() { closed = true }
+    }
+
+    private class ByteArraySource(private val bytes: ByteArray) : InputByteSource {
+        override val expectedBytes = bytes.size.toLong()
+        override fun openStream() = ByteArrayInputStream(bytes)
     }
 
     private class InterruptingInputStream : InputStream() {
