@@ -42,7 +42,9 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.contextmenu.builder.item
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
 import androidx.compose.foundation.text.contextmenu.modifier.appendTextContextMenuComponents
+import androidx.compose.foundation.text.contextmenu.modifier.filterTextContextMenuComponents
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -1694,6 +1696,8 @@ private fun LeanEditorScreen(
                     lspUiState = lspUiState,
                     onCursorChanged = onCursorChanged,
                     onHover = { path, text, offset -> onLspAction(path, text, offset, LspRequestKind.Hover) },
+                    onDefinition = { path, text, offset -> onLspAction(path, text, offset, LspRequestKind.Definition) },
+                    onReferences = { path, text, offset -> onLspAction(path, text, offset, LspRequestKind.References) },
                     hoverEnabled = lspUiState.status == "Ready",
                     completionsEnabled = completionsEnabled,
                     onRequestCompletion = onRequestCompletion,
@@ -2332,6 +2336,8 @@ private fun EditorContent(
     lspUiState: LspUiState,
     onCursorChanged: (String, String, Int) -> Unit,
     onHover: (String, String, Int) -> Unit,
+    onDefinition: (String, String, Int) -> Unit,
+    onReferences: (String, String, Int) -> Unit,
     hoverEnabled: Boolean,
     completionsEnabled: Boolean,
     onRequestCompletion: (String, String, Int) -> Unit,
@@ -2450,12 +2456,16 @@ private fun EditorContent(
                         stateDescription = if (editor.tabs.single { it.path == editor.activePath }.dirty) "Unsaved changes" else "Saved"
                     }
                 if (hoverEnabled && isLeanFile) {
-                    sourceModifier = sourceModifier.appendTextContextMenuComponents {
-                        item(HoverContextMenuKey, "Hover") {
-                            onHover(editor.activePath, value.text, value.selection.start)
-                            close()
+                    // Samsung's API-33 floating toolbar exposes only four entries and does not
+                    // provide overflow for later Compose components. Keep Copy available, but
+                    // omit Cut/Paste/Select-all so every Lean action is
+                    // reachable instead of silently existing past the native toolbar's limit.
+                    sourceModifier = sourceModifier
+                        .filterTextContextMenuComponents { component ->
+                            component.key != TextContextMenuKeys.CutKey &&
+                                component.key != TextContextMenuKeys.PasteKey &&
+                                component.key != TextContextMenuKeys.SelectAllKey
                         }
-                    }
                 }
                 var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                 var completionSelection by remember { mutableStateOf(0) }
@@ -2484,9 +2494,24 @@ private fun EditorContent(
                         },
                 ) {
                     val editorViewportWidth = maxWidth
-                    androidx.compose.foundation.layout.Box(
-                        Modifier.fillMaxWidth().horizontalScroll(editorHorizontalScroll),
-                    ) {
+                    var editorViewportModifier = Modifier.fillMaxWidth().horizontalScroll(editorHorizontalScroll)
+                    if (hoverEnabled && isLeanFile) {
+                        editorViewportModifier = editorViewportModifier.appendTextContextMenuComponents {
+                            item(HoverContextMenuKey, "Hover") {
+                                onHover(editor.activePath, value.text, value.selection.start)
+                                close()
+                            }
+                            item(DefinitionContextMenuKey, "Definition") {
+                                onDefinition(editor.activePath, value.text, value.selection.start)
+                                close()
+                            }
+                            item(ReferencesContextMenuKey, "References") {
+                                onReferences(editor.activePath, value.text, value.selection.start)
+                                close()
+                            }
+                        }
+                    }
+                    androidx.compose.foundation.layout.Box(editorViewportModifier) {
                         BasicTextField(
                             value = value,
                             onValueChange = {
@@ -2724,6 +2749,8 @@ private fun GoalsPanel(modifier: Modifier, activePath: String?, lspUiState: LspU
 }
 
 private object HoverContextMenuKey
+private object DefinitionContextMenuKey
+private object ReferencesContextMenuKey
 
 internal fun goalPaneSections(goal: String?, expectedType: String?): List<Pair<String?, String>> {
     val tactic = goal.orEmpty().trim().takeUnless { it.isEmpty() || it.equals("No goals", ignoreCase = true) }
