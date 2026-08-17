@@ -106,6 +106,9 @@ import org.lean4android.process.JvmCommandRunner
 import org.lean4android.process.JvmProcessLauncher
 import org.lean4android.process.ProcessResult
 import org.lean4android.process.ProcessJobState
+import org.lean4android.process.StdinPlan
+import org.lean4android.process.StdinState
+import org.lean4android.process.InputOperationResult
 import org.lean4android.project.LeanProjectRepository
 import org.lean4android.toolchain.AndroidToolchainLocator
 import org.lean4android.toolchain.ToolchainCommandFactory
@@ -282,6 +285,8 @@ class MainActivity : ComponentActivity() {
                     onCheck = ::checkLeanSource,
                     onCancel = ::cancelRun,
                     retainedRun = latestRunSnapshot,
+                    onSendInput = ::sendRunInput,
+                    onCloseInput = ::closeRunInput,
                     onVerifyRuntime = ::verifyRuntime,
                     projects = repository.list().map { it.id },
                     projectFiles = repository.open(activeProjectId).sourceFiles,
@@ -934,7 +939,7 @@ class MainActivity : ComponentActivity() {
         return deleted
     }
 
-    private fun checkLeanSource(sources: Map<String, String>, update: (EditorRunState) -> Unit) {
+    private fun checkLeanSource(sources: Map<String, String>, stdinPlan: StdinPlan, update: (EditorRunState) -> Unit) {
         thread(name = "lean-editor-check") {
             runCatching {
                 val locator = AndroidToolchainLocator(applicationContext)
@@ -951,7 +956,7 @@ class MainActivity : ComponentActivity() {
                 val buildCommand = repository.lakeBuild(factory, activeProjectId)
                 val entry = repository.open(activeProjectId).sourceFiles.firstOrNull { it == "Main.lean" }
                     ?: repository.open(activeProjectId).sourceFiles.first()
-                runOnUiThread { startBuildThenRun(buildCommand, repository.lakeLean(factory, activeProjectId, entry), entry, update) }
+                runOnUiThread { startBuildThenRun(buildCommand, repository.lakeLean(factory, activeProjectId, entry), entry, stdinPlan, update) }
             }.onFailure { failure -> runOnUiThread { update(EditorRunState.Failed(failure.message ?: failure::class.java.simpleName)) } }
         }
     }
@@ -960,6 +965,7 @@ class MainActivity : ComponentActivity() {
         buildCommand: org.lean4android.process.ProcessCommand,
         runCommand: org.lean4android.process.ProcessCommand,
         entry: String,
+        stdinPlan: StdinPlan,
         update: (EditorRunState) -> Unit,
     ) {
         val service = jobService
@@ -968,7 +974,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         activeRunUpdate = update
-        val snapshot = service.startRun(buildCommand, runCommand, entry)
+        val snapshot = service.startRun(buildCommand, runCommand, entry, stdinPlan)
         latestRunSnapshot = snapshot
         if (snapshot.state != ProcessJobState.Running) {
             activeRunUpdate?.invoke(snapshot.toEditorRunState())
@@ -977,6 +983,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun cancelRun() { latestRunSnapshot?.id?.let { jobService?.cancelRun(it) } }
+    private fun sendRunInput(text: String, appendLf: Boolean): InputOperationResult =
+        latestRunSnapshot?.id?.let { jobService?.sendToRun(it, text, appendLf) }
+            ?: InputOperationResult.Rejected("No active run")
+    private fun closeRunInput(): InputOperationResult =
+        latestRunSnapshot?.id?.let { jobService?.closeRunInput(it) }
+            ?: InputOperationResult.Rejected("No active run")
 
     private fun verifyRuntime(update: (EditorRunState) -> Unit) {
         thread(name = "lean-runtime-integrity") {
@@ -1142,9 +1154,11 @@ private fun LeanEditorScreen(
     onSave: (EditorSessionState) -> EditorSessionState,
     onSaveAll: (EditorSessionState) -> EditorSessionState,
     onSaveAs: (EditorSessionState, String) -> EditorSessionState,
-    onCheck: (Map<String, String>, (EditorRunState) -> Unit) -> Unit,
+    onCheck: (Map<String, String>, StdinPlan, (EditorRunState) -> Unit) -> Unit,
     onCancel: () -> Unit,
     retainedRun: ProjectRunSnapshot?,
+    onSendInput: (String, Boolean) -> InputOperationResult,
+    onCloseInput: () -> InputOperationResult,
     onVerifyRuntime: ((EditorRunState) -> Unit) -> Unit,
     projects: List<String>,
     projectFiles: List<String>,
@@ -1195,6 +1209,8 @@ private fun LeanEditorScreen(
     var messagesCollapsed by rememberSaveable { mutableStateOf(false) }
     var outputCollapsed by rememberSaveable { mutableStateOf(false) }
     var outputPopupVisible by rememberSaveable { mutableStateOf(false) }
+    var runInputDialog by rememberSaveable { mutableStateOf(false) }
+    var interactiveRunSelected by rememberSaveable { mutableStateOf(false) }
     var openWorkspace by remember { mutableStateOf(false) }
     var newProjectDialog by rememberSaveable { mutableStateOf(false) }
     var newProjectName by rememberSaveable { mutableStateOf("") }
@@ -1291,7 +1307,7 @@ private fun LeanEditorScreen(
         publish(next.select(target.path))
     }
 
-    fun buildProject() {
+    fun buildProject(stdinPlan: StdinPlan) {
         if (running) return
         revealOutput(outputPresentation, outputCollapsed).also { reveal ->
             outputCollapsed = reveal.dockedCollapsed
@@ -1299,11 +1315,15 @@ private fun LeanEditorScreen(
         }
         runState = EditorRunState.Running
         outputSnapshot = formatRunState(runState)
-        onCheck(editor.tabs.associate { it.path to it.contents }) { result ->
+        onCheck(editor.tabs.associate { it.path to it.contents }, stdinPlan) { result ->
             runState = result
             outputSnapshot = formatRunState(result)
             if (result is EditorRunState.Finished) publish(editor.markSaved())
         }
+    }
+
+    fun requestRun() {
+        if (!running) runInputDialog = true
     }
 
     fun saveActive() {
@@ -1321,6 +1341,30 @@ private fun LeanEditorScreen(
         publish(editor.remove(activePath))
     }
 
+    if (runInputDialog) AlertDialog(
+        onDismissRequest = { runInputDialog = false },
+        title = { Text("Run input") },
+        text = {
+            Column {
+                TextButton(onClick = { interactiveRunSelected = false }) {
+                    RadioButton(selected = !interactiveRunSelected, onClick = null)
+                    Text("None (EOF)")
+                }
+                TextButton(onClick = { interactiveRunSelected = true }) {
+                    RadioButton(selected = interactiveRunSelected, onClick = null)
+                    Text("Interactive")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                runInputDialog = false
+                buildProject(if (interactiveRunSelected) StdinPlan.Interactive else StdinPlan.ImmediateEof)
+            }) { Text("Run") }
+        },
+        dismissButton = { TextButton(onClick = { runInputDialog = false }) { Text("Cancel") } },
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1337,7 +1381,7 @@ private fun LeanEditorScreen(
                     }
                 },
                 actions = {
-                    IconButton(enabled = !running && editor.tabs.isNotEmpty(), onClick = ::buildProject) {
+                    IconButton(enabled = !running && editor.tabs.isNotEmpty(), onClick = ::requestRun) {
                         Text("▶", modifier = Modifier.semantics { contentDescription = "Run project" })
                     }
                     androidx.compose.foundation.layout.Box {
@@ -1417,8 +1461,11 @@ private fun LeanEditorScreen(
                     editor = editor,
                     value = editor.activePath?.let(fieldValues::getValue) ?: TextFieldValue(),
                     running = running,
-                    runState = runState,
-                    outputSnapshot = outputSnapshot,
+                        runState = runState,
+                        outputSnapshot = outputSnapshot,
+                        retainedRun = retainedRun,
+                        onSendInput = onSendInput,
+                        onCloseInput = onCloseInput,
                     searchVisible = searchVisible,
                     searchQuery = searchQuery,
                     canUndo = histories[editor.activePath]?.canUndo == true,
@@ -1431,7 +1478,7 @@ private fun LeanEditorScreen(
                     onSearchNext = { navigateSearch(false) },
                     onUndo = ::undo,
                     onRedo = ::redo,
-                    onBuild = ::buildProject,
+                    onBuild = ::requestRun,
                     onCancel = onCancel,
                     onVerify = {
                         runState = EditorRunState.Running
@@ -1544,7 +1591,7 @@ private fun LeanEditorScreen(
                                 .verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.spacedBy(dimensions.compactSpacing),
                         ) {
-                            TextButton(enabled = !running, onClick = { drawerOpen = false; buildProject() }) { Text("Build project") }
+                            TextButton(enabled = !running, onClick = { drawerOpen = false; requestRun() }) { Text("Build project") }
                             TextButton(enabled = !running, onClick = {
                                 drawerOpen = false
                                 runState = EditorRunState.Running
@@ -1853,7 +1900,7 @@ private fun LeanEditorScreen(
                             modifier = Modifier.semantics { contentDescription = "Close Output popup" },
                         ) { Text("Close") }
                     }
-                    OutputPanel(runState, Modifier.weight(1f), outputSnapshot)
+                    OutputPanel(runState, Modifier.weight(1f), outputSnapshot, retainedRun, onSendInput, onCloseInput, onCancel)
                     if (running) TextButton(onClick = onCancel) { Text("Cancel") }
                 }
             }
@@ -2020,6 +2067,9 @@ private fun EditorContent(
     running: Boolean,
     runState: EditorRunState,
     outputSnapshot: String,
+    retainedRun: ProjectRunSnapshot?,
+    onSendInput: (String, Boolean) -> InputOperationResult,
+    onCloseInput: () -> InputOperationResult,
     searchVisible: Boolean,
     searchQuery: String,
     canUndo: Boolean,
@@ -2067,7 +2117,10 @@ private fun EditorContent(
             Column(Modifier.padding(dimensions.screenPadding), verticalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
                 Text("No file open", style = MaterialTheme.typography.titleMedium)
                 Text("Use Files → New or Open, or choose a file from the Project drawer.")
-                if (outputPresentation == OutputPresentation.Docked) OutputPanel(runState, textOverride = outputSnapshot)
+                if (outputPresentation == OutputPresentation.Docked) OutputPanel(
+                    runState, textOverride = outputSnapshot, runSnapshot = retainedRun,
+                    onSendInput = onSendInput, onCloseInput = onCloseInput, onCancel = onCancel,
+                )
             }
         }
         return
@@ -2300,7 +2353,10 @@ private fun EditorContent(
                 onDrag = onOutputDrag,
                 onStep = onOutputStep,
             )
-            if (paneVisible(outputCollapsed)) OutputPanel(runState, Modifier.weight(outputFraction), outputSnapshot)
+            if (paneVisible(outputCollapsed)) OutputPanel(
+                runState, Modifier.weight(outputFraction), outputSnapshot, retainedRun,
+                onSendInput, onCloseInput, onCancel,
+            )
         }
     }
 }
@@ -2563,7 +2619,14 @@ private fun ProjectOpenRow(id: String, onOpen: () -> Unit, onRename: () -> Unit,
 internal fun editorLineNumbers(text: String): String = (1..(text.count { it == '\n' } + 1)).joinToString("\n")
 
 @Composable
-private fun OutputPanel(state: EditorRunState, textOverride: String? = null) {
+private fun OutputPanel(
+    state: EditorRunState,
+    textOverride: String? = null,
+    runSnapshot: ProjectRunSnapshot? = null,
+    onSendInput: (String, Boolean) -> InputOperationResult = { _, _ -> InputOperationResult.Rejected("Unavailable") },
+    onCloseInput: () -> InputOperationResult = { InputOperationResult.Rejected("Unavailable") },
+    onCancel: () -> Unit = {},
+) {
     OutputPanel(
         state = state,
         modifier = Modifier.heightIn(
@@ -2571,13 +2634,51 @@ private fun OutputPanel(state: EditorRunState, textOverride: String? = null) {
             max = LeanTheme.dimensions.outputMaxHeight,
         ),
         textOverride = textOverride,
+        runSnapshot = runSnapshot,
+        onSendInput = onSendInput,
+        onCloseInput = onCloseInput,
+        onCancel = onCancel,
     )
 }
 
 @Composable
-private fun OutputPanel(state: EditorRunState, modifier: Modifier, textOverride: String? = null) {
+private fun OutputPanel(
+    state: EditorRunState,
+    modifier: Modifier,
+    textOverride: String? = null,
+    runSnapshot: ProjectRunSnapshot? = null,
+    onSendInput: (String, Boolean) -> InputOperationResult = { _, _ -> InputOperationResult.Rejected("Unavailable") },
+    onCloseInput: () -> InputOperationResult = { InputOperationResult.Rejected("Unavailable") },
+    onCancel: () -> Unit = {},
+) {
     val style = LeanTheme.components.output
     val output = textOverride ?: formatRunState(state)
+    val stdin = runSnapshot?.activeJob?.stdin
+    val interactive = runSnapshot?.phase == ProjectRunPhase.Program && state == EditorRunState.Running &&
+        (stdin is StdinState.Open || (stdin is StdinState.Closed && stdin.reason != StdinState.CloseReason.ImmediateEof))
+    var inputText by rememberSaveable(runSnapshot?.id) { mutableStateOf("") }
+    var inputMessage by remember(runSnapshot?.id) { mutableStateOf<String?>(null) }
+    var confirmEof by remember { mutableStateOf(false) }
+    fun send(appendLf: Boolean) {
+        when (val result = onSendInput(inputText, appendLf)) {
+            is InputOperationResult.Accepted -> { inputText = ""; inputMessage = null }
+            InputOperationResult.AlreadyClosed -> inputMessage = "Input is already closed"
+            is InputOperationResult.Rejected -> inputMessage = result.reason
+        }
+    }
+    fun close() {
+        when (val result = onCloseInput()) {
+            is InputOperationResult.Accepted -> inputMessage = "EOF sent"
+            InputOperationResult.AlreadyClosed -> inputMessage = "Input is already closed"
+            is InputOperationResult.Rejected -> inputMessage = result.reason
+        }
+    }
+    if (confirmEof) AlertDialog(
+        onDismissRequest = { confirmEof = false },
+        title = { Text("Discard unsent input and send EOF?") },
+        confirmButton = { TextButton(onClick = { confirmEof = false; close() }) { Text("Send EOF") } },
+        dismissButton = { TextButton(onClick = { confirmEof = false }) { Text("Keep editing") } },
+    )
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -2586,14 +2687,43 @@ private fun OutputPanel(state: EditorRunState, modifier: Modifier, textOverride:
         contentColor = style.contentColor,
         shape = style.shape,
     ) {
-        SelectionContainer {
-            Text(
-                text = output,
-                modifier = Modifier
-                    .padding(style.contentPadding)
-                    .verticalScroll(rememberScrollState()),
-                style = style.bodyStyle,
-            )
+        Column {
+            SelectionContainer {
+                Text(
+                    text = output,
+                    modifier = Modifier
+                        .padding(style.contentPadding)
+                        .verticalScroll(rememberScrollState()),
+                    style = style.bodyStyle,
+                )
+            }
+            if (interactive) {
+                val open = stdin is StdinState.Open
+                Text(
+                    when (stdin) {
+                        is StdinState.Open -> if (stdin.pendingBytes > 0) "Delivering input (${stdin.pendingBytes} bytes pending)" else "Input open"
+                        is StdinState.Closed -> if (stdin.reason == StdinState.CloseReason.UserEof) "EOF sent" else "Input closed: ${stdin.reason}"
+                    },
+                    modifier = Modifier.padding(style.contentPadding),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it; inputMessage = null },
+                    enabled = open,
+                    label = { Text("Program input") },
+                    modifier = Modifier.fillMaxWidth().padding(style.contentPadding),
+                    minLines = 1,
+                    maxLines = 3,
+                )
+                inputMessage?.let { Text(it, modifier = Modifier.padding(style.contentPadding)) }
+                Row(modifier = Modifier.padding(style.contentPadding)) {
+                    TextButton(enabled = open, onClick = { send(true) }) { Text("Send line") }
+                    TextButton(enabled = open, onClick = { send(false) }) { Text("Send") }
+                    TextButton(enabled = open, onClick = { if (inputText.isEmpty()) close() else confirmEof = true }) { Text("EOF") }
+                    TextButton(onClick = onCancel) { Text("Cancel") }
+                }
+            }
         }
     }
 }
