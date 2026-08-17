@@ -11,10 +11,13 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 @Immutable
 data class LeanDimensions(
@@ -167,10 +170,17 @@ object LeanTheme {
 @Composable
 fun Lean4AndroidTheme(
     darkTheme: Boolean,
+    editorFontSizeSp: Int = 16,
+    interfaceFontPercent: Int = 100,
     dimensions: LeanDimensions = LeanDimensions(),
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
+    val systemDensity = LocalDensity.current
+    val interfaceScale = interfaceFontPercent / 100f
+    CompositionLocalProvider(
+        LocalDensity provides Density(systemDensity.density, systemDensity.fontScale * interfaceScale),
+    ) {
+        MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
         val colors = MaterialTheme.colorScheme
         val typography = MaterialTheme.typography
         val shapes = MaterialTheme.shapes
@@ -182,7 +192,10 @@ fun Lean4AndroidTheme(
                 gutterColor = colors.surface,
                 gutterContentColor = colors.onSurfaceVariant,
                 cursorColor = colors.primary,
-                codeStyle = typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                codeStyle = typography.bodyMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = (editorFontSizeSp / interfaceScale).sp,
+                ),
                 shape = shapes.small,
             ),
             goals = PaneStyle(
@@ -270,5 +283,6 @@ fun Lean4AndroidTheme(
             LocalLeanComponentStyles provides styles,
             content = content,
         )
+        }
     }
 }

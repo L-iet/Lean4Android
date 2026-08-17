@@ -113,6 +113,7 @@ import org.lean4android.process.CapturedOutput
 import org.lean4android.project.LeanProjectRepository
 import org.lean4android.toolchain.AndroidToolchainLocator
 import org.lean4android.toolchain.ToolchainCommandFactory
+import org.lean4android.toolchain.ToolchainInstallationState
 import org.lean4android.app.ui.theme.Lean4AndroidTheme
 import org.lean4android.app.ui.theme.LeanTheme
 import java.nio.file.Files
@@ -129,6 +130,16 @@ internal sealed interface RunInputSelection {
     data object Interactive : RunInputSelection
     data class ProjectFile(val relativePath: String, val useSavedVersion: Boolean) : RunInputSelection
 }
+
+internal data class AboutIdentity(
+    val app: String,
+    val applicationId: String,
+    val buildVariant: String,
+    val toolchainId: String,
+    val toolchainSchema: Int,
+    val leanVersion: String,
+    val lakeVersion: String,
+)
 
 internal enum class OutputStreamKind(val label: String) { Stdout("stdout"), Stderr("stderr") }
 private data class PendingOutputExport(val stream: OutputStreamKind, val capture: CapturedOutput)
@@ -299,7 +310,25 @@ class MainActivity : ComponentActivity() {
             var completionsEnabled by remember {
                 mutableStateOf(getPreferences(MODE_PRIVATE).getBoolean("completionsEnabled", true))
             }
-            Lean4AndroidTheme(darkTheme = darkTheme) {
+            var symbolRowVisible by remember {
+                mutableStateOf(getPreferences(MODE_PRIVATE).getBoolean("symbolRowVisible", true))
+            }
+            var editorSymbols by remember {
+                mutableStateOf(editorSymbolsFromPreference(getPreferences(MODE_PRIVATE).getString("editorSymbols", null)))
+            }
+            var editorFontSizeSp by remember {
+                mutableStateOf(editorFontSizeFromPreference(getPreferences(MODE_PRIVATE).getInt("editorFontSizeSp", 16)))
+            }
+            var interfaceFontPercent by remember {
+                mutableStateOf(interfaceFontPercentFromPreference(getPreferences(MODE_PRIVATE).getInt("interfaceFontPercent", 100)))
+            }
+            var aboutIdentity by remember { mutableStateOf<AboutIdentity?>(null) }
+            var aboutLoading by remember { mutableStateOf(false) }
+            Lean4AndroidTheme(
+                darkTheme = darkTheme,
+                editorFontSizeSp = editorFontSizeSp,
+                interfaceFontPercent = interfaceFontPercent,
+            ) {
                 LeanEditorScreen(
                     initialState = editorState,
                     onStateChanged = {
@@ -375,6 +404,38 @@ class MainActivity : ComponentActivity() {
                         completionsEnabled = enabled
                         getPreferences(MODE_PRIVATE).edit().putBoolean("completionsEnabled", enabled).apply()
                         if (!enabled) dismissCompletion()
+                    },
+                    symbolRowVisible = symbolRowVisible,
+                    onSymbolRowVisibleChanged = { visible ->
+                        symbolRowVisible = visible
+                        getPreferences(MODE_PRIVATE).edit().putBoolean("symbolRowVisible", visible).apply()
+                    },
+                    editorSymbols = editorSymbols,
+                    onEditorSymbolsChanged = { symbols ->
+                        editorSymbols = symbols
+                        getPreferences(MODE_PRIVATE).edit()
+                            .putString("editorSymbols", editorSymbolsPreference(symbols)).apply()
+                    },
+                    editorFontSizeSp = editorFontSizeSp,
+                    onEditorFontSizeChanged = { size ->
+                        editorFontSizeSp = editorFontSizeFromPreference(size)
+                        getPreferences(MODE_PRIVATE).edit().putInt("editorFontSizeSp", editorFontSizeSp).apply()
+                    },
+                    interfaceFontPercent = interfaceFontPercent,
+                    onInterfaceFontPercentChanged = { percent ->
+                        interfaceFontPercent = interfaceFontPercentFromPreference(percent)
+                        getPreferences(MODE_PRIVATE).edit().putInt("interfaceFontPercent", interfaceFontPercent).apply()
+                    },
+                    aboutIdentity = aboutIdentity,
+                    aboutLoading = aboutLoading,
+                    onLoadAbout = {
+                        if (!aboutLoading) {
+                            aboutLoading = true
+                            thread(name = "about-runtime-probe") {
+                                val identity = runtimeAboutIdentity()
+                                runOnUiThread { aboutIdentity = identity; aboutLoading = false }
+                            }
+                        }
                     },
                 )
             }
@@ -1089,6 +1150,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun runtimeAboutIdentity(): AboutIdentity {
+        fun unavailable(message: String) = "Unavailable: $message"
+        val locator = AndroidToolchainLocator(applicationContext)
+        val layout = when (val health = locator.locate()) {
+            is ToolchainHealth.Ready -> health.layout
+            is ToolchainHealth.Missing -> return AboutIdentity(
+                app = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                applicationId = packageName,
+                buildVariant = BuildConfig.BUILD_TYPE,
+                toolchainId = BuildConfig.TOOLCHAIN_ID,
+                toolchainSchema = ToolchainInstallationState.SCHEMA_VERSION,
+                leanVersion = unavailable(health.problems.joinToString("; ")),
+                lakeVersion = unavailable(health.problems.joinToString("; ")),
+            )
+        }
+        val factory = ToolchainCommandFactory(layout, filesDir, cacheDir)
+        fun probe(name: String, command: org.lean4android.process.ProcessCommand): String = runCatching {
+            val result = runBlocking { JvmCommandRunner().run(command) }
+            require(!result.timedOut) { "$name probe timed out" }
+            require(result.exitCode == 0) { result.stderr.trim().ifEmpty { "$name exited ${result.exitCode}" } }
+            result.stdout.trim().ifEmpty { result.stderr.trim() }.ifEmpty { error("$name returned no version") }
+        }.getOrElse { unavailable(it.message ?: it::class.java.simpleName) }
+        return AboutIdentity(
+            app = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+            applicationId = packageName,
+            buildVariant = BuildConfig.BUILD_TYPE,
+            toolchainId = layout.id.value,
+            toolchainSchema = ToolchainInstallationState.SCHEMA_VERSION,
+            leanVersion = probe("Lean", factory.lean(listOf("--version"), filesDir)),
+            lakeVersion = probe("Lake", factory.lake(listOf("--version"), filesDir)),
+        )
+    }
+
     private fun verifyRuntime(update: (EditorRunState) -> Unit) {
         thread(name = "lean-runtime-integrity") {
             val started = TimeSource.Monotonic.markNow()
@@ -1165,6 +1259,31 @@ private data class PendingLspRequest(
     val kind: LspRequestKind,
     val position: LspPosition,
 )
+
+internal val DEFAULT_EDITOR_SYMBOLS = listOf(
+    "{", "}", "^", "→", "←", "↔", "∀", "∃", "λ", "∧", "∨", "¬", "≤", "≥", "≠", "⊢", "⟨", "⟩",
+)
+internal const val MAX_EDITOR_SYMBOLS = 60
+internal val EDITOR_FONT_SIZES_SP = listOf(12, 14, 16, 18, 20, 22)
+internal val INTERFACE_FONT_PERCENTAGES = listOf(85, 100, 115, 130)
+
+internal fun editorFontSizeFromPreference(value: Int): Int = value.takeIf { it in EDITOR_FONT_SIZES_SP } ?: 16
+internal fun interfaceFontPercentFromPreference(value: Int): Int =
+    value.takeIf { it in INTERFACE_FONT_PERCENTAGES } ?: 100
+
+internal fun validateEditorSymbols(lines: String): Result<List<String>> = runCatching {
+    val symbols = lines.lines().map(String::trim).filter(String::isNotEmpty)
+    require(symbols.isNotEmpty()) { "Enter at least one symbol" }
+    require(symbols.size <= MAX_EDITOR_SYMBOLS) { "At most $MAX_EDITOR_SYMBOLS symbols are supported" }
+    require(symbols.all { it.codePointCount(0, it.length) <= 16 }) { "Each entry must be at most 16 characters" }
+    require(symbols.all { symbol -> symbol.none(Char::isISOControl) }) { "Control characters are not supported" }
+    symbols
+}
+
+internal fun editorSymbolsFromPreference(value: String?): List<String> =
+    value?.let(::validateEditorSymbols)?.getOrNull() ?: DEFAULT_EDITOR_SYMBOLS
+
+internal fun editorSymbolsPreference(symbols: List<String>): String = symbols.joinToString("\n")
 
 private fun jsonDisplayText(value: JsonValue?): String = when (value) {
     null, JsonValue.NullValue -> ""
@@ -1319,6 +1438,17 @@ private fun LeanEditorScreen(
     onOutputPresentationChanged: (OutputPresentation) -> Unit,
     completionsEnabled: Boolean,
     onCompletionsEnabledChanged: (Boolean) -> Unit,
+    symbolRowVisible: Boolean,
+    onSymbolRowVisibleChanged: (Boolean) -> Unit,
+    editorSymbols: List<String>,
+    onEditorSymbolsChanged: (List<String>) -> Unit,
+    editorFontSizeSp: Int,
+    onEditorFontSizeChanged: (Int) -> Unit,
+    interfaceFontPercent: Int,
+    onInterfaceFontPercentChanged: (Int) -> Unit,
+    aboutIdentity: AboutIdentity?,
+    aboutLoading: Boolean,
+    onLoadAbout: () -> Unit,
 ) {
     var editor by remember { mutableStateOf(initialState) }
     var runState by remember { mutableStateOf<EditorRunState>(EditorRunState.Idle) }
@@ -1354,6 +1484,9 @@ private fun LeanEditorScreen(
     var closeDirty by remember { mutableStateOf(false) }
     var exportDirty by remember { mutableStateOf(false) }
     var settingsPage by remember { mutableStateOf<String?>(null) }
+    var symbolEditorVisible by rememberSaveable { mutableStateOf(false) }
+    var symbolEditorText by rememberSaveable { mutableStateOf("") }
+    var symbolEditorError by rememberSaveable { mutableStateOf<String?>(null) }
     var referencesVisible by remember { mutableStateOf(false) }
     val fieldValues = remember {
         mutableStateMapOf<String, TextFieldValue>().apply {
@@ -1698,6 +1831,8 @@ private fun LeanEditorScreen(
                     onReferences = { path, text, offset -> onLspAction(path, text, offset, LspRequestKind.References) },
                     hoverEnabled = lspUiState.status == "Ready",
                     completionsEnabled = completionsEnabled,
+                    symbolRowVisible = symbolRowVisible,
+                    editorSymbols = editorSymbols,
                     onRequestCompletion = onRequestCompletion,
                     onDismissCompletion = onDismissCompletion,
                     onApplyCompletion = { candidate ->
@@ -1990,10 +2125,22 @@ private fun LeanEditorScreen(
             Surface(Modifier.fillMaxSize()) {
                 val dimensions = LeanTheme.dimensions
                 val shellStyle = LeanTheme.components.shell
-                Column(Modifier.fillMaxSize().padding(dimensions.screenPadding), verticalArrangement = Arrangement.spacedBy(dimensions.sectionSpacing)) {
+                Column(
+                    Modifier.fillMaxSize().padding(dimensions.screenPadding).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(dimensions.sectionSpacing),
+                ) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = { settingsPage = if (page == "settings") null else "settings" }) { Text("Back") }
-                        Text(when (page) { "appearance" -> "Appearance"; "editor" -> "Editor"; "interface" -> "Interface"; else -> "Settings" }, style = shellStyle.screenHeadingStyle)
+                        Text(
+                            when (page) {
+                                "appearance" -> "Appearance"
+                                "editor" -> "Editor"
+                                "interface" -> "Interface"
+                                "about" -> "About"
+                                else -> "Settings"
+                            },
+                            style = shellStyle.screenHeadingStyle,
+                        )
                     }
                     if (page == "settings") {
                         TextButton(
@@ -2008,6 +2155,10 @@ private fun LeanEditorScreen(
                             modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Open Interface settings" },
                             onClick = { settingsPage = "interface" },
                         ) { Text("Interface") }
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Open About" },
+                            onClick = { settingsPage = "about"; onLoadAbout() },
+                        ) { Text("About") }
                     } else if (page == "appearance") {
                         Row(
                             Modifier.fillMaxWidth().clickable { onDarkThemeChanged(!darkTheme) }.padding(vertical = dimensions.settingsRowPadding),
@@ -2022,6 +2173,42 @@ private fun LeanEditorScreen(
                             )
                         }
                     } else if (page == "editor") {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onSymbolRowVisibleChanged(!symbolRowVisible) }
+                                .padding(vertical = dimensions.settingsRowPadding),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text("Symbol row")
+                                Text("Show the Lean symbol row below the editor", style = shellStyle.supportingStyle)
+                            }
+                            Switch(
+                                checked = symbolRowVisible,
+                                onCheckedChange = onSymbolRowVisibleChanged,
+                                modifier = Modifier.semantics { contentDescription = "Show symbol row" },
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                symbolEditorText = editorSymbols.joinToString("\n")
+                                symbolEditorError = null
+                                symbolEditorVisible = true
+                            },
+                            modifier = Modifier.semantics { contentDescription = "Customize symbol row" },
+                        ) { Text("Customize symbols (${editorSymbols.size})") }
+                        Text("Editor font size", style = MaterialTheme.typography.titleMedium)
+                        EDITOR_FONT_SIZES_SP.forEach { size ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable { onEditorFontSizeChanged(size) }
+                                    .padding(vertical = dimensions.settingsRowPadding)
+                                    .semantics { contentDescription = "Editor font size: $size sp" },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = editorFontSizeSp == size, onClick = { onEditorFontSizeChanged(size) })
+                                Text("$size sp")
+                            }
+                        }
                         Row(
                             Modifier.fillMaxWidth().clickable { onCompletionsEnabledChanged(!completionsEnabled) }
                                 .padding(vertical = dimensions.settingsRowPadding),
@@ -2060,7 +2247,22 @@ private fun LeanEditorScreen(
                                 }
                             }
                         }
-                    } else {
+                    } else if (page == "interface") {
+                        Text("Interface font size", style = MaterialTheme.typography.titleMedium)
+                        INTERFACE_FONT_PERCENTAGES.forEach { percent ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable { onInterfaceFontPercentChanged(percent) }
+                                    .padding(vertical = dimensions.settingsRowPadding)
+                                    .semantics { contentDescription = "Interface font size: $percent percent" },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = interfaceFontPercent == percent,
+                                    onClick = { onInterfaceFontPercentChanged(percent) },
+                                )
+                                Text("$percent%")
+                            }
+                        }
                         Text("Output presentation", style = MaterialTheme.typography.titleMedium)
                         OutputPresentation.entries.forEach { presentation ->
                             val label = if (presentation == OutputPresentation.Docked) "Docked" else "Popup"
@@ -2092,10 +2294,72 @@ private fun LeanEditorScreen(
                                 }
                             }
                         }
+                    } else {
+                        if (aboutLoading) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
+                                CircularProgressIndicator(Modifier.size(24.dp))
+                                Text("Probing installed Lean and Lake executables…")
+                            }
+                        }
+                        aboutIdentity?.let { identity ->
+                            SelectionContainer {
+                                Column(
+                                    Modifier.fillMaxWidth().semantics { contentDescription = "Runtime identity" },
+                                    verticalArrangement = Arrangement.spacedBy(dimensions.standardSpacing),
+                                ) {
+                                    Text("App version: ${identity.app}")
+                                    Text("Application ID: ${identity.applicationId}")
+                                    Text("Build variant: ${identity.buildVariant}")
+                                    Text("Toolchain: ${identity.toolchainId}")
+                                    Text("Installation schema: ${identity.toolchainSchema}")
+                                    Text("Lean: ${identity.leanVersion}")
+                                    Text("Lake: ${identity.lakeVersion}")
+                                }
+                            }
+                        }
+                        if (!aboutLoading) TextButton(onClick = onLoadAbout) { Text("Probe again") }
                     }
                 }
             }
         }
+    }
+
+    if (symbolEditorVisible) {
+        AlertDialog(
+            onDismissRequest = { symbolEditorVisible = false },
+            title = { Text("Customize symbols") },
+            text = {
+                Column {
+                    Text("One entry per line, in display order. Maximum $MAX_EDITOR_SYMBOLS.")
+                    OutlinedTextField(
+                        value = symbolEditorText,
+                        onValueChange = { symbolEditorText = it; symbolEditorError = null },
+                        label = { Text("Symbols") },
+                        isError = symbolEditorError != null,
+                        supportingText = { symbolEditorError?.let { Text(it) } },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp)
+                            .semantics { contentDescription = "Ordered symbol entries" },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    validateEditorSymbols(symbolEditorText).onSuccess { symbols ->
+                        onEditorSymbolsChanged(symbols)
+                        symbolEditorVisible = false
+                    }.onFailure { symbolEditorError = it.message }
+                }) { Text("Apply") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        symbolEditorText = DEFAULT_EDITOR_SYMBOLS.joinToString("\n")
+                        symbolEditorError = null
+                    }) { Text("Restore defaults") }
+                    TextButton(onClick = { symbolEditorVisible = false }) { Text("Cancel") }
+                }
+            },
+        )
     }
 
     if (outputPopupVisible && outputPresentation == OutputPresentation.Popup) {
@@ -2338,6 +2602,8 @@ private fun EditorContent(
     onReferences: (String, String, Int) -> Unit,
     hoverEnabled: Boolean,
     completionsEnabled: Boolean,
+    symbolRowVisible: Boolean,
+    editorSymbols: List<String>,
     onRequestCompletion: (String, String, Int) -> Unit,
     onDismissCompletion: () -> Unit,
     onApplyCompletion: (CompletionCandidate) -> Unit,
@@ -2558,14 +2824,17 @@ private fun EditorContent(
                 }
             }
         }
-        EditorSymbolRow(
-            enabled = !running,
-            onSymbol = { symbol ->
-                val updated = insertEditorSymbol(value, symbol)
-                onValueChange(updated)
-                onCursorChanged(editor.activePath, updated.text, updated.selection.start)
-            },
-        )
+        if (symbolRowVisible) {
+            EditorSymbolRow(
+                symbols = editorSymbols,
+                enabled = !running,
+                onSymbol = { symbol ->
+                    val updated = insertEditorSymbol(value, symbol)
+                    onValueChange(updated)
+                    onCursorChanged(editor.activePath, updated.text, updated.selection.start)
+                },
+            )
+        }
         if (running) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(dimensions.standardSpacing)) {
             CircularProgressIndicator()
             Text("Working…")
@@ -2706,8 +2975,7 @@ private fun ProjectTree(
 }
 
 @Composable
-private fun EditorSymbolRow(enabled: Boolean, onSymbol: (String) -> Unit) {
-    val symbols = listOf("{", "}", "^", "→", "←", "↔", "∀", "∃", "λ", "∧", "∨", "¬", "≤", "≥", "≠", "⊢", "⟨", "⟩")
+private fun EditorSymbolRow(symbols: List<String>, enabled: Boolean, onSymbol: (String) -> Unit) {
     val style = LeanTheme.components.symbolRow
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).semantics { contentDescription = "Lean symbol keyboard row" },
