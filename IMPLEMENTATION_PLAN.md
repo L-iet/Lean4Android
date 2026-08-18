@@ -612,6 +612,14 @@ These are valuable, but each expands the executable-code, package-management, UI
 
 ## 9. Immediate next actions
 
+Release-lane rule after the dual-package Auto Goals/IME regression update: Android1
+(`org.lean4android.app`, toolchain `lean-4.32.1-android1`) is the only APK that
+receives foreground product changes. Android2
+(`org.lean4android.app.android2candidate`, toolchain `lean-4.32.1-android2`) is
+frozen at that shared feature baseline while its Mathlib build is pending. Do not
+rebuild or update-install Android2 for later Android1 changes until the Mathlib
+candidate is ready for its next integration gate; record any intentional exception.
+
 1. Treat Mathlib artifact production as a resumable parallel lane: inspect it with `mathlib/scripts/status-android2-build.sh`, resume the targeted `Mathlib.Data.Nat.Prime.Basic` command when machine capacity permits, and never run concurrent producers. At a successful target checkpoint, audit facets/header and complete the basic Android2 import test.
 2. Implement the UI style/theme architecture prerequisite from `docs/editor/UI_STYLE_ARCHITECTURE.md` before further UI feature work, using a staged Compose-native token/component migration that preserves M4.6 behavior.
 3. In the foreground lane, implement and validate the M5 dynamic Lake module-coverage corrective: inner-directory globbing, explicit top-level module reconciliation, supported-project migration, and the `<LeanProjectName>/New.lean` default path. It no longer waits for the slow targeted build, but must finish before broader/full Mathlib production.

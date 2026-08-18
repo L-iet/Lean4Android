@@ -23,8 +23,10 @@ The host machine sometimes crashes. Do not let important knowledge exist only in
 
 ## Current project boundary
 
-- M0, the API-33 reference-device portion of M1/M1.5, M1.6, and M2 are complete as recorded in the history. Continue from the plan's M3 immediate actions unless the user chooses another task.
-- Preserve the visible two-tab Lake project editor and the offline M2 lifecycle as continuous acceptance baselines.
+- M0 through M4, M5.1 general project files/program streams, M5.2 direct definition/reference navigation, and M5.3 symbol-row/font/About preferences are complete on the API-33 reference device as recorded in the history. Continue from the history's final checkpoint and the plan's M6 preparation/hardening actions unless the user chooses another task.
+- Preserve the visible multi-tab Lake project editor, contained general-file support, retained LSP/program lifecycle, and offline M2 behavior as continuous acceptance baselines.
+- Android1 (`org.lean4android.app`, toolchain `lean-4.32.1-android1`) is the foreground product lane. Android2 (`org.lean4android.app.android2candidate`, toolchain `lean-4.32.1-android2`) is frozen after the shared Auto Goals/IME regression baseline while its Mathlib build is pending. Do not rebuild or update-install Android2 for later Android1 changes unless an intentional Mathlib integration-gate exception is recorded.
+- Treat Mathlib production as a separate resumable lane. Inspect it with `mathlib/scripts/status-android2-build.sh`, preserve finalized artifacts, and never start concurrent producers.
 - Initial support remains one pinned Lean toolchain, `arm64-v8a`, API 29+, offline core/Std, and APK-installed executable code. Do not silently broaden this to arbitrary Git/network dependencies, downloaded executable code, native Lake targets, Elan, or a general terminal.
 - Respect `docs/adr/0001-android-lean-process-and-runtime-boundary.md`. Reopen the child-process decision only with new device/API evidence.
 

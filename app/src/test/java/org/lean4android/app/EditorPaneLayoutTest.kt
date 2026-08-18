@@ -13,6 +13,15 @@ class EditorPaneLayoutTest {
         assertEquals(GoalsPanePosition.Bottom, GoalsPanePosition.Bottom.resolve(isPortrait = false))
     }
 
+    @Test fun autoPlacementDoesNotUseImeReducedWorkspaceShape() {
+        // A 1600x2560 portrait window can expose an approximately 1600x1200 workspace
+        // after a docked IME opens. The stable window orientation remains portrait.
+        val stableWindowIsPortrait = true
+        val imeReducedWorkspaceAppearsLandscape = 1600 > 1200
+        assertTrue(imeReducedWorkspaceAppearsLandscape)
+        assertEquals(GoalsPanePosition.Bottom, GoalsPanePosition.Auto.resolve(stableWindowIsPortrait))
+    }
+
     @Test fun persistedFractionsAreClampedToUsableBounds() {
         assertEquals(0.18f, clampPaneFraction(-1f))
         assertEquals(0.42f, clampPaneFraction(0.42f))

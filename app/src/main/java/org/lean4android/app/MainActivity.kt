@@ -3,6 +3,7 @@ package org.lean4android.app
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.content.ServiceConnection
 import android.provider.DocumentsContract
@@ -75,6 +76,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -1759,6 +1761,7 @@ private fun LeanEditorScreen(
             )
         },
     ) { padding ->
+        val windowIsPortrait = LocalConfiguration.current.orientation != Configuration.ORIENTATION_LANDSCAPE
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -1850,7 +1853,10 @@ private fun LeanEditorScreen(
                     onOutputStep = { onOutputFractionChanged(outputFraction + it) },
                 )
             }
-            val resolvedGoalsPosition = goalsPanePosition.resolve(isPortrait = maxHeight >= maxWidth)
+            // Auto placement follows the window configuration, not the IME-reduced workspace.
+            // Switching Row/Column here while BasicTextField owns focus disposes the input
+            // connection and makes docked keyboards close themselves.
+            val resolvedGoalsPosition = goalsPanePosition.resolve(isPortrait = windowIsPortrait)
             if (resolvedGoalsPosition == GoalsPanePosition.Right) {
                 val availablePixels = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
                 Row(workspaceModifier) {

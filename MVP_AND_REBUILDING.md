@@ -227,6 +227,13 @@ Device tests proved that removing server/private/IR facets causes successive imp
 
 ### 5.3 Build and test the APK
 
+The production/foreground build lane is Android1. Android2 is an isolated candidate
+package used for the pending Mathlib build and is frozen after the shared Auto
+Goals/portrait IME fix. Unless performing the documented Mathlib integration gate,
+do not pass `isolatedToolchainCandidate=true`, rebuild Android2, or update-install
+its package for subsequent foreground changes. Build and install only Android1 so
+the frozen candidate remains a stable comparison point.
+
 Use the checked-in UI/Gradle runner. It uses the project-local Gradle home,
 disables the build cache for the large asset build, preserves Gradle's exit
 status, appends combined output to `toolchain/output/ui-gradle-build.log`, and
