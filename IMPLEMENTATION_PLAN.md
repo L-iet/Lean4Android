@@ -105,43 +105,47 @@ The current full Lean 4.32 runtime sysroot is approximately 2,175,501 KiB on-dev
 
 If child execution from the installed native directory proves unreliable across supported devices, stop and write an architecture decision record comparing: (a) a small native launcher, and (b) embedding Lean behind a narrow JNI boundary. Do not build the IDE UI around an unproven process model.
 
-## 3. Proposed architecture
+## 3. Architecture
 
-Use a single Android app with clear module boundaries:
+Use a single Android app with clear module boundaries. The implemented ownership is:
 
 ```text
-Compose UI / editor
-        |
-EditorSession + ProjectViewModel
-        |
-LeanService interface
-   +----+------------------+
-   |                       |
-LspClient              CommandRunner
-long-lived             bounded one-shot jobs
-lake serve             lake lean / lake build
-   |                       |
-ProcessSupervisor + ToolchainEnvironment
-        |
-packaged arm64 Lean/Lake + writable sysroot/projects
+Compose UI / editor (`app`)
+   ├── EditorSessionStore + LeanProjectRepository (`core-project`)
+   ├── LeanLspService ── `core-lsp` ── retained `lake serve`
+   └── ProjectJobService ── `core-process` ── bounded Lake/Lean jobs
+                                      │
+                              `core-toolchain`
+                                      │
+                  packaged arm64 Lean/Lake + writable sysroot/projects
 ```
 
-Recommended Gradle modules:
+Current Gradle modules and repository entry points:
 
 ```text
-app/                    activities, navigation, dependency wiring
-core-model/             project, document, diagnostic, goal models
-core-projects/          safe filesystem operations, import/export
+app/                    Compose UI, Activity, retained Android services
+core-model/             shared typed toolchain/command models
+core-project/           safe projects, files, Lake policy, import/export
 core-toolchain/         installation, manifest verification, environment
 core-process/           launch, streams, cancellation, crash logs
 core-lsp/               JSON-RPC framing, LSP lifecycle, Lean extensions
-feature-editor/         editor, tabs, diagnostics, goal/hover UI
-feature-projects/       project list/tree/create/import/export
-feature-settings/       toolchain/library/storage settings
 toolchain/              reproducible build scripts, patches, manifests
+scripts/                durable UI/Gradle wrapper and progress logging
+Makefile                discoverable doctor/configure/test/UI/APK/toolchain entry points
+ARCHITECTURE.md          current cross-module/runtime/data-flow architecture
 ```
 
-Use Kotlin, coroutines/Flow, Jetpack Compose, Room only for app metadata, and ordinary files as the source of truth for projects. Put process ownership in a bound foreground service when background execution is required; the UI must be able to reconnect after activity recreation.
+Use Kotlin, coroutines, Jetpack Compose, and ordinary files as the source of truth for projects. Do not add Room without a demonstrated metadata need. Retained non-exported Android services own LSP and build/run processes so the UI can reconnect after Activity recreation; foreground-service promotion remains a policy decision for genuinely long user-visible background work.
+
+The root Makefile is a thin newcomer/contributor front end, not a second build
+implementation. `make doctor` and `make doctor-toolchain` validate the two supported
+prerequisite boundaries; `make configure-sdk`, `make test`, `make ui`, `make apk`,
+`make toolchain`, and `make all` delegate to the checked-in Gradle/toolchain scripts.
+Canonical script flags, durable logs, audits, and recovery semantics remain in
+`scripts/run-ui-gradle.sh` and `toolchain/scripts/`. Keep
+[`README.md`](README.md), [`MVP_AND_REBUILDING.md`](MVP_AND_REBUILDING.md), and
+[`ARCHITECTURE.md`](ARCHITECTURE.md) synchronized whenever these entry points,
+prerequisites, artifact-reuse rules, or module ownership change.
 
 ### 3.1 Editor choice
 
@@ -531,10 +535,21 @@ Completed (2026-08-17): symbol-row visibility/content, bounded validation and de
 - Add repeated low-memory-exit recovery and aggregate native-child memory telemetry to the
   Mathlib release matrix; Android's app-process PSS alone is not an adequate budget signal.
 - Add crash reporting with opt-in/privacy controls, onboarding, licenses, backup policy, and a support bundle exporter.
-- Publish known limitations and supported Lean/package versions.
+- Publish known limitations, supported Lean/package versions, and maintained newcomer build/recovery documentation with validated prerequisite links and commands.
 - Test API 29 and current Android, multi-user/profile behavior, APK path migration, USB-independent production flows, and all supported delivery channels.
 
 Exit: signed beta passes the release test matrix with no critical data-loss, sandbox-escape, startup, or orphan-process bugs.
+
+Documentation/tooling foundation completed (2026-08-19): the root README now gives
+a short clean-machine-to-APK path; `MVP_AND_REBUILDING.md` distinguishes trusted
+audited-distribution reuse from the full pinned native build and records setup,
+capacity, timing, recovery, and device validation; `ARCHITECTURE.md` documents the
+implemented module/runtime/data flows; and the UI overview/style documents reflect
+M5.3. The root Makefile exposes prerequisite checks and simple SDK/test/UI/APK/
+toolchain/all commands while delegating to canonical scripts. Local/external links,
+both doctor targets, Make dry-runs, and whitespace validation passed. Treat this as
+an M6 documentation baseline that must remain synchronized, not as completion of
+the remaining release-hardening matrix.
 
 ### M7 — Post-beta editor depth
 
@@ -634,7 +649,7 @@ candidate is ready for its next integration gate; record any intentional excepti
 
 1. Treat the running full Mathlib build as the sole resumable producer: inspect it with `mathlib/scripts/status-android2-build.sh`, preserve finalized facets, and never start a concurrent producer. Audit and measure explicit pack checkpoints without mutating the frozen Android2 installation outside a recorded integration-gate exception.
 2. Before the M6 feature freeze or Mathlib pack promotion, implement and physically validate the memory-aware active-document lifecycle from `docs/delivery/ANDROID2_MATHLIB_EDITOR_MEMORY_FAILURE.md`. Retain dirty inactive tabs while preventing one 1–2 GB Lean worker per restored Mathlib document, add aggregate package-UID native-child telemetry and low-memory recovery, and preserve ordinary Core/Std multi-tab behavior.
-3. Implement the UI style/theme architecture prerequisite from `docs/editor/UI_STYLE_ARCHITECTURE.md` before further UI feature work, using a staged Compose-native token/component migration that preserves the accepted M4/M5 behavior.
+3. Preserve the implemented Compose-native semantic theme/style baseline from `docs/editor/UI_STYLE_ARCHITECTURE.md`; perform remaining component extraction incrementally only where it clarifies ownership, and require later M6 UI work to use the same typed mechanism without regressing accepted M4/M5 behavior.
 4. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
 5. Execute the remaining M6 hardening matrix: threat modeling, compatibility/soak/cancellation/corruption/process-death and repeated-low-memory tests, opt-in crash reporting/privacy, onboarding/licenses/backup/support bundle, known limitations, and supported-version documentation.
 6. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4/M5 process, pane, stream, navigation, preference, and IME baselines.
