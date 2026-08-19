@@ -1,7 +1,7 @@
 # Lean4Android implementation plan
 
-Status: active roadmap; M0 complete, M1 reference-device conformance substantially complete; M1.5 runtime-layout hardening in progress
-Last revised: 2026-08-13
+Status: active roadmap; M0–M4, the M5 dynamic-module corrective, and M5.0–M5.3 complete on API 33; Android1 M6 preparation/hardening and the isolated Android2 Mathlib producer are active
+Last revised: 2026-08-19
 
 ## 1. Goal and first release boundary
 
@@ -432,7 +432,7 @@ Exit: representative Mathlib files work offline without process death, and the d
 
 M5 artifact production is a slow, resumable producer lane, not a global roadmap lock. At most one process may write `toolchain/work/mathlib-android2-producer`; its `flock`, state file, append-only log, conservative facet audit, and `--rehash --no-cache` restart path are the authority for recovery. A host crash or stopped producer does not invalidate finalized modules and must not trigger a clean rebuild.
 
-While a targeted or full Mathlib build runs, continue the foreground product lane with work that does not mutate the producer tree, Android2 Core/Std candidate, Mathlib pins, pack schema, or the same physical-device state needed by an immediate Mathlib gate. In particular, the dynamic Lake module corrective, M5.0 UI work, M5.1–M5.3 host-side implementation, M6 preparation, documentation, and API/emulator coverage may advance with validation proportional to their own boundaries. Schedule brief Mathlib artifact audits and tablet import/install/performance gates at producer checkpoints; those gates block promotion of the Mathlib pack, not unrelated implementation.
+While the full Mathlib build runs, continue Android1 M6 preparation, documentation, and API/emulator coverage when that work does not mutate the producer tree, Android2 Core/Std candidate, Mathlib pins, pack schema, or physical-device state needed by an immediate Mathlib gate. Schedule brief Mathlib artifact audits and tablet import/install/performance gates at producer checkpoints; those gates block promotion of the Mathlib pack, not unrelated implementation.
 
 Before starting or resuming a producer, run `mathlib/scripts/status-android2-build.sh`. Use the exact targeted/full recipes in the Mathlib integration plan and rebuilding guide. Prefer two producer jobs when foreground Gradle/emulator work needs capacity and up to four when the producer owns the machine; never start a second producer to change job count. Do not run broad cleanup, dependency updates, official cache substitution, or concurrent commands against the producer checkout.
 
@@ -444,7 +444,7 @@ Decision and migration plan: [`docs/editor/UI_STYLE_ARCHITECTURE.md`](docs/edito
 - Use layered Material 3 foundations, typed semantic design tokens, `CompositionLocal` theme access, and immutable component style objects. Keep adaptive/window/IME policy, pane fractions, state, callbacks, accessibility semantics, and content in explicit UI logic.
 - Extract meaningful reusable UI components from `MainActivity.kt` incrementally. Account for applicable width/height bounds, spacing, container/content/text colors, text roles, shapes, elevation, tint, and visual variants at each component boundary without creating a style class for every structural `Row` or `Column`.
 - Preserve caller-owned `Modifier` behavior and modifier ordering. Use modifier presets only for narrow repeated decoration; do not introduce class strings, a CSS cascade, an external stylesheet/config parser, arbitrary user-controlled layout, or a new UI dependency.
-- Preserve the accepted M4.6 light/dark, adaptive layout, IME, accessibility, editor, pane, and lifecycle baselines. Build future M5.0 popup Output/completion and M5.3 font preferences on the same semantic style system.
+- Preserve the accepted M4/M5 light/dark, adaptive layout, IME, accessibility, editor, pane, popup/completion, font-preference, and lifecycle baselines. Build later M6 UI work on the same semantic style system.
 
 Exit: visual tokens and meaningful component styles are discoverable outside screen logic; adaptive behavior remains typed and tested; the current UI is physically equivalent across supported layouts; and subsequent UI work has one safe extension mechanism.
 
@@ -502,6 +502,8 @@ The detailed process, buffering, lifecycle, UI, security, and validation design 
 
 Exit: a project can safely contain and edit ordinary text files; a Lean program can read a project-relative file; EOF, interactive, and project-file stdin modes behave predictably; stdout/stderr remain bounded and separately exportable; and cancellation/recreation leave no child process or silent data loss.
 
+Completed (2026-08-17): contained general-text editing/plain-text fallback, deterministic project working directories, explicit EOF/interactive/project-file stdin, retained Send/EOF/Cancel/recreation ownership, exact bounded project-revision streaming with dirty save choices, and independent byte-faithful stdout/stderr export are implemented. Focused and aggregate host tests passed. API-33 physical offline acceptance covered exact clean/dirty project input, interactive lifecycle, separate stream export, real picker cancellation, restored device state, and exact no-orphan cleanup.
+
 ### M5.2 — Source navigation results
 
 - Change go-to-definition from Goals-panel location text to opening the target project file and placing the cursor at the returned UTF-16 line/column when the URI resolves to a contained, user-accessible project file. Retain a truthful non-navigable location display for toolchain, generated, or external targets.
@@ -510,6 +512,8 @@ Exit: a project can safely contain and edit ordinary text files; a Lean program 
 
 Exit: definition and reference requests navigate directly to valid contained project locations, inaccessible targets degrade truthfully, and stale or malformed LSP locations cannot open an external path or move the cursor incorrectly.
 
+Completed (2026-08-17): definition and reference results now cross one typed contained-location boundary with generation/version/cursor validation, truthful disabled external targets, bounded sorted/deduplicated references, direct UTF-16 navigation, and accessible dismissal/reopening behavior. Host regression and API-33 physical acceptance proved real definition and two-reference navigation while preserving dirty tabs and leaving no child process.
+
 ### M5.3 — Editor and interface preferences
 
 - Add **Settings → Editor** controls to show or hide the symbol row and customize its ordered contents, with validated persistence, restore-defaults behavior, accessible labels, and a supported maximum of 60 entries. Preserve horizontal scrolling and cursor/selection-aware insertion.
@@ -517,6 +521,8 @@ Exit: definition and reference requests navigate directly to valid contained pro
 - After the higher-priority M5.1/M5.2 work and preference controls, add a low-priority **Settings → About** screen with copyable, truthful runtime identity: app version name/code, application/package and build variant, active immutable toolchain ID/schema, and the actual available Lean and Lake versions reported by the installed pinned executables. Show unavailable/probe failures explicitly rather than substituting build-time assumptions. Validate the screen independently in the production Android1 app and the isolated Android2 candidate so the two installations are immediately distinguishable.
 
 Exit: symbol-row visibility/content and both font-size settings are durable, bounded, accessible, and usable across supported phone/tablet layouts without regressing editing or pane reachability; About accurately identifies both Android1 and Android2 installations and their active Lean/Lake toolchains.
+
+Completed (2026-08-17): symbol-row visibility/content, bounded validation and defaults, independent editor/interface font preferences, and truthful copyable About identity with probed Lean/Lake versions are implemented. Host tests and API-33 physical acceptance covered preference persistence, layout/IME behavior, process recreation, and distinct Android1/Android2 identity. The subsequent Auto Goals portrait IME focus regression was corrected and physically accepted in both packages before Android2 was frozen.
 
 ### M6 — Hardening and beta release (3–5 weeks)
 
@@ -590,7 +596,7 @@ CI should build and unit-test every change, build the pinned toolchain from scra
 | Missing `.olean.server`, `.olean.private`, or `.ir` | Imports fail despite apparently healthy `.olean` | Manifest declares required facet set; installer and health check verify representative and complete hashes |
 | Lean/Lake executable-relative path inference | Standard library or Lake installation is not found | `LEAN_SYSROOT` patch, typed environment, conventional-layout symlinks, upgrade tests |
 | Lean/Lake invokes missing Unix tools | Builds or dependencies fail | Constrain v1 commands; audit subprocesses; expose capabilities, not a terminal |
-| LSP/Mathlib exceeds mobile memory | OS kills server or UI stalls | Measure RSS early; one server/project; bounded caches; explicit server stop |
+| LSP/Mathlib exceeds mobile memory | LMKD kills the foreground app or UI stalls | Synchronize only the active heavy document, retain inactive buffers without multiplying workers, budget/measure the aggregate package UID process tree, recover safely after low-memory exits, and require physical one/two/three-document gates |
 | Toolchain/Mathlib version mismatch | Invalid artifacts or confusing errors | Immutable version IDs and signed compatibility manifests |
 | Package size is too large | Store/install failure | Core delivery spike before UI expansion; separate data packs, AAB/asset delivery, measure compressed/installed/peak temporary sizes |
 | Arbitrary package build logic | Security and compatibility issues | Offline allowlisted packs first; no downloaded executable/native plugins |
@@ -626,16 +632,14 @@ frozen at that shared feature baseline while its Mathlib build is pending. Do no
 rebuild or update-install Android2 for later Android1 changes until the Mathlib
 candidate is ready for its next integration gate; record any intentional exception.
 
-1. Treat Mathlib artifact production as a resumable parallel lane: inspect it with `mathlib/scripts/status-android2-build.sh` and never run concurrent producers. The basic Android2 prime import gate succeeds in a one-file project but restoring three Mathlib files reproducibly triggers LMKD; keep the full producer running independently while the memory-aware active-document lifecycle in `docs/delivery/ANDROID2_MATHLIB_EDITOR_MEMORY_FAILURE.md` blocks pack promotion.
-2. Implement the UI style/theme architecture prerequisite from `docs/editor/UI_STYLE_ARCHITECTURE.md` before further UI feature work, using a staged Compose-native token/component migration that preserves M4.6 behavior.
-3. In the foreground lane, implement and validate the M5 dynamic Lake module-coverage corrective: inner-directory globbing, explicit top-level module reconciliation, supported-project migration, and the `<LeanProjectName>/New.lean` default path. It no longer waits for the slow targeted build, but must finish before broader/full Mathlib production.
-4. After both the targeted Android import gate and module corrective pass, start/resume the full version-matched Mathlib producer in parallel with independent product work. Measure capacity, recovery, latency, memory, and thermal behavior at explicit pack checkpoints without regressing the completed M2–M4 editor/project/LSP/lifecycle baselines.
-5. After the focused M5 Mathlib compatibility/feasibility gate, complete M5.0 in priority order: first Docked/Popup Output presentation with automatic Build/Run reveal, then enabled/disabled caret-anchored automatic LSP completion.
-6. M5.1 through M5.3 are complete. Before the M6 feature freeze, implement and physically validate the Mathlib memory-aware active-document lifecycle without regressing retained dirty tabs or ordinary Core/Std multi-tab behavior.
+1. Treat the running full Mathlib build as the sole resumable producer: inspect it with `mathlib/scripts/status-android2-build.sh`, preserve finalized facets, and never start a concurrent producer. Audit and measure explicit pack checkpoints without mutating the frozen Android2 installation outside a recorded integration-gate exception.
+2. Before the M6 feature freeze or Mathlib pack promotion, implement and physically validate the memory-aware active-document lifecycle from `docs/delivery/ANDROID2_MATHLIB_EDITOR_MEMORY_FAILURE.md`. Retain dirty inactive tabs while preventing one 1–2 GB Lean worker per restored Mathlib document, add aggregate package-UID native-child telemetry and low-memory recovery, and preserve ordinary Core/Std multi-tab behavior.
+3. Implement the UI style/theme architecture prerequisite from `docs/editor/UI_STYLE_ARCHITECTURE.md` before further UI feature work, using a staged Compose-native token/component migration that preserves the accepted M4/M5 behavior.
+4. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
+5. Execute the remaining M6 hardening matrix: threat modeling, compatibility/soak/cancellation/corruption/process-death and repeated-low-memory tests, opt-in crash reporting/privacy, onboarding/licenses/backup/support bundle, known limitations, and supported-version documentation.
+6. Add API-29 and current-Android physical/emulator coverage while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4/M5 process, pane, stream, navigation, preference, and IME baselines.
 7. Keep auto-indent, code folding, Unicode abbreviation completion, and word wrap in post-beta M7 until their editing, source-mapping, IME, accessibility, and performance invariants are designed and measured.
-8. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
-9. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
-10. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
+8. Preserve and revisit ADR 0001 if API/device coverage produces evidence against the accepted process/runtime boundary.
 
 ## 10. Reference material
 

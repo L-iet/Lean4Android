@@ -4,7 +4,7 @@ This document records how to reproduce and preserve the accepted Android1 APK wi
 
 ## Milestone boundary
 
-`lean-4.32.1-android1` is the accepted runtime for the completed M4 product line. The last completed Android1 milestone was **M4.6 — Project and tree lifecycle actions**, including the preceding M4.1–M4.5 work and its API-33 physical-device acceptance. M5 Mathlib beta is the first milestone using the release-ABI `lean-4.32.1-android2` candidate.
+`lean-4.32.1-android1` is the accepted runtime for the foreground product line. M0 through M4, the M5 dynamic-module corrective, and M5.0–M5.3 are complete with API-33 physical-device acceptance; Android1 is now in M6 preparation/hardening. The shared Auto Goals/portrait IME correction is the last feature intentionally synchronized to Android2. Android2 uses the release-ABI `lean-4.32.1-android2` candidate and is frozen at that baseline while its separate Mathlib producer and integration gates proceed. Do not rebuild or update-install Android2 for later Android1 changes unless an intentional Mathlib-gate exception is recorded.
 
 The two installed application identities are deliberately different:
 
@@ -48,10 +48,10 @@ After a successful build, immediately preserve the shared output under an identi
 
 ```shell
 cp -p app/build/outputs/apk/debug/app-debug.apk \
-  toolchain/output/apks/lean4android-m4.6-lean-4.32.1-android1-debug.apk
+  toolchain/output/apks/lean4android-android1-lean-4.32.1-debug.apk
 sha256sum \
-  toolchain/output/apks/lean4android-m4.6-lean-4.32.1-android1-debug.apk \
-  | tee toolchain/output/apks/lean4android-m4.6-lean-4.32.1-android1-debug.apk.sha256
+  toolchain/output/apks/lean4android-android1-lean-4.32.1-debug.apk \
+  | tee toolchain/output/apks/lean4android-android1-lean-4.32.1-debug.apk.sha256
 ```
 
 The copied APK and checksum are generated recovery artifacts, not automatically version-controlled release assets.
@@ -74,10 +74,10 @@ Rebuilding alone does not re-establish physical-device acceptance. If the APK wi
 
 ```shell
 ADB_LIBUSB=1 .android-sdk/platform-tools/adb install --user 0 -r -t \
-  toolchain/output/apks/lean4android-m4.6-lean-4.32.1-android1-debug.apk
+  toolchain/output/apks/lean4android-android1-lean-4.32.1-debug.apk
 ```
 
-An update install preserves app-private state. Installer, layout, locator, or migration changes also require a genuinely fresh-data test; a preserved healthy sysroot is not sufficient. Revalidate cold launch, runtime verification, offline Lean/Lake Run, LSP/editor readiness, M4.6 project lifecycle behavior, and exact package-scoped no-orphan cleanup. Record device and network mutations and restore the intended state.
+An update install preserves app-private state. Installer, layout, locator, or migration changes also require a genuinely fresh-data test; a preserved healthy sysroot is not sufficient. Revalidate cold launch, runtime verification, offline Lean/Lake Run, LSP/editor readiness, the affected M4/M5 editor, project, stream, navigation, or preference boundary, and exact package-scoped no-orphan cleanup. Record device and network mutations and restore the intended state.
 
 ## Full Android1 toolchain recovery
 
