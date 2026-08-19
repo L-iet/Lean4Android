@@ -1,18 +1,51 @@
 # UI style and theme architecture
 
-Status: staged implementation in progress; root/editor/pane/shell/tree/hover styles migrated, physical completion pending
+Status: semantic theme/style baseline implemented and API-33 accepted; incremental component extraction remains available during M6
 
-Milestone: M5 foreground architecture prerequisite
+Milestone: M5 foreground architecture prerequisite, retained as an M6 UI constraint
 
-Last updated: 2026-08-16
+Last updated: 2026-08-19
+
+## New contributor quick start
+
+The implemented design system is
+[`LeanTheme.kt`](../../app/src/main/java/org/lean4android/app/ui/theme/LeanTheme.kt).
+It contains `Lean4AndroidTheme`, semantic dimensions, immutable editor/pane/shell/
+tree/hover styles, and `LeanTheme` composition-local access. Most composables still
+live in `MainActivity.kt`; this is intentional incremental migration, not evidence
+that styles should move back into screen logic.
+
+Before changing UI code, complete the setup in [README.md](../../README.md). With a
+trusted audited Android1 distribution already present, the UI requires JDK 17,
+Python 3, the Android SDK (platform 36 and Build Tools 35.0.0), and no native Lean
+rebuild. Run:
+
+```shell
+make doctor
+make ui
+```
+
+For a focused theme test plus Kotlin compilation:
+
+```shell
+scripts/run-ui-gradle.sh \
+  :app:testDebugUnitTest \
+  --tests org.lean4android.app.ui.theme.LeanThemeTest \
+  :app:compileDebugKotlin
+```
+
+Build the installable APK with `make apk`. Recorded warm UI validation is commonly
+2–5 minutes; the first cold theme build on `/mnt/d` took 56m53s because it read
+about 4.6 GB and wrote about 2.2 GB during staging. Quiet staging is not proof of a
+hang. Full setup and recovery are in [MVP_AND_REBUILDING.md](../../MVP_AND_REBUILDING.md).
 
 ## 1. Problem and objective
 
-Lean4Android's native Compose UI has grown incrementally through M4.6. The visible behavior is working, but visual decisions are spread through `MainActivity.kt` and, to a lesser extent, `HoverMarkdown.kt`: widths and heights, minimum/maximum sizes, padding and gaps, surface/content colors, shapes, elevations, monospaced text choices, and Material typography roles are selected beside callbacks and state transitions.
+Lean4Android's native Compose UI grew incrementally through M4.6 with visual decisions spread through `MainActivity.kt` and `HoverMarkdown.kt`. The M5 migration introduced a typed semantic styling layer and moved the main editor, pane, shell, project-tree, and hover contracts into it. Some one-off Material typography calls and structural layout remain near their composables where they do not represent reusable design decisions.
 
-This makes global tuning difficult, hides relationships between similar components, and increases the chance that M5.0 popups or M5.1–M5.3 preferences introduce another set of unrelated literals. The goal is to establish one discoverable, typed styling layer before those features are implemented.
+The objective remains one discoverable, typed styling mechanism so later M6 work does not reintroduce unrelated literal sets. M5.0 popup/completion and M5.3 font preferences now consume the shared root/theme behavior rather than defining a competing styling system.
 
-The change is architectural, not a visual redesign. Its first migration should preserve the accepted light/dark appearance and physical M4.6 layouts byte-for-byte or as closely as Compose rendering permits. It must not move behavioral state, content, accessibility descriptions, process actions, or project/LSP logic into style files.
+This is architectural, not a visual redesign. The implemented migration preserved the accepted light/dark appearance and physical M4/M5 layouts. Behavioral state, content, accessibility descriptions, process actions, project/LSP logic, orientation, pane fractions, and IME policy remain outside style files.
 
 ## 2. What belongs in the styling layer
 
@@ -38,11 +71,18 @@ Not every numeric value is styling. The following stay with layout or behavior c
 
 The public `Modifier` parameter of a composable remains caller-owned. A component applies its internal style without replacing or unexpectedly reordering caller constraints, input, semantics, or test tags.
 
-## 3. Current evidence
+## 3. Current implementation evidence
 
-`MainActivity.kt` currently installs `MaterialTheme(colorScheme = ...)` directly and uses default Material light/dark schemes. The same file contains the application shell and most visible components. Representative embedded choices include the 300 dp drawer, 120/320 dp tree bounds, 12/24 dp page insets, 240 dp Find field, editor/gutter padding, 160 dp Messages maximum, 34×36 dp symbol controls, 16 dp splitters, tab padding, 100–200 dp Output bounds, semantic Material colors, and repeated typography/monospace copies.
+`MainActivity` installs `Lean4AndroidTheme`, passing the persisted dark-theme,
+editor-font, and interface-scale choices. `LeanTheme.kt` owns the 300 dp drawer,
+120/320 dp tree bounds, page/editor/gutter spacing, Messages maximum, symbol-control
+sizes, splitter thickness, Output bounds, semantic Material colors, monospaced code
+roles, and grouped styles for editor, panes, tabs, symbol row, shell, tree, and hover.
 
-`HoverMarkdown.kt` separately selects Markdown spacing, code-block padding/colors, typography, and monospaced text. `EditorPaneLayout.kt`, by contrast, contains tested decisions about pane placement, fraction clamping, IME visibility, diagnostic severity, and compact layout thresholds. That is a useful boundary: the new design system supplies visual tokens, but pure policy helpers continue to own adaptive behavior.
+`HoverMarkdown.kt` consumes `LeanTheme.components.hover` and shared dimensions.
+`EditorPaneLayout.kt` continues to contain tested pane placement, fraction clamping,
+IME visibility, diagnostic severity, and compact-layout policy. This is the intended
+boundary: the design system supplies visual tokens; pure helpers own behavior.
 
 ## 4. Alternatives considered
 
@@ -103,32 +143,23 @@ Use a Compose-native, layered Kotlin design system:
 5. Reusable composables move to focused `ui/components` files. Screen/state coordination remains in screen/activity code; pure adaptive rules remain in tested policy files such as `EditorPaneLayout.kt`.
 6. Call sites use semantic component defaults, with explicit typed overrides only where a real variant exists. No strings, selectors, cascade, runtime stylesheet parser, or arbitrary user-controlled dimensions are introduced.
 
-The intended source layout is:
+The current source layout is intentionally compact:
 
 ```text
 app/src/main/java/org/lean4android/app/ui/
-├── theme/
-│   ├── Theme.kt              Lean4AndroidTheme and public LeanTheme access
-│   ├── Color.kt              light/dark Material and semantic color tokens
-│   ├── Type.kt               interface/code typography construction
-│   ├── Dimensions.kt         primitive dimensions and semantic layout tokens
-│   ├── Shapes.kt              app shape/elevation definitions
-│   └── ComponentStyles.kt     grouped immutable component defaults
-├── components/
-│   ├── EditorSurface.kt
-│   ├── ProjectDrawer.kt
-│   ├── PanePanels.kt
-│   ├── PaneSplitter.kt
-│   ├── FileTabs.kt
-│   └── SymbolRow.kt
-└── screens/                       optional once screen extraction is useful
+└── theme/
+    └── LeanTheme.kt          root theme, dimensions, semantic component styles
 ```
 
-File boundaries may be combined initially when a file would otherwise contain only a few declarations. The semantic API matters more than reproducing this tree mechanically.
+The visible component functions remain mostly in `MainActivity.kt`, and Hover
+rendering remains in `HoverMarkdown.kt`; both consume the theme. Split
+`LeanTheme.kt` into color/type/dimension/style files or extract `ui/components`
+only when the resulting ownership is clearer. The semantic API matters more than
+reproducing a speculative directory tree mechanically.
 
-## 6. Proposed API shape
+## 6. Implemented API shape
 
-The exact names should be refined during implementation, but the boundary should resemble:
+The implementation uses immutable style records grouped by `LeanComponentStyles`:
 
 ```kotlin
 @Immutable
@@ -155,14 +186,17 @@ data class EditorStyle(
 object LeanTheme {
     val dimensions: LeanDimensions
         @Composable @ReadOnlyComposable get() = LocalLeanDimensions.current
-    val editor: EditorStyle
-        @Composable @ReadOnlyComposable get() = LocalEditorStyle.current
-    val panes: LeanPaneStyles
-        @Composable @ReadOnlyComposable get() = LocalPaneStyles.current
+    val components: LeanComponentStyles
+        @Composable @ReadOnlyComposable get() = LocalLeanComponentStyles.current
 }
 ```
 
-Styles containing theme-derived colors or typography are built inside `Lean4AndroidTheme` or with composable defaults. Stable immutable objects should be remembered where useful. Component functions may expose `style: PaneStyle = LeanTheme.panes.output`, but ordinary screen code should not pass every color and padding individually.
+Styles containing theme-derived colors or typography are built inside
+`Lean4AndroidTheme`. Components read values such as
+`LeanTheme.components.output`, `LeanTheme.components.editor`, and
+`LeanTheme.dimensions`; screen code does not pass every color and padding
+individually. A future extracted component may accept a typed style override when
+a real preview/test/product variant requires it.
 
 Material components should continue to receive standard Material colors and typography when the semantic role matches. The app layer supplements Material rather than wrapping every Material primitive. Content color must be set with `Surface`/`CompositionLocalProvider` where descendants should inherit it; foreground, background, and text color should not become three contradictory values.
 
@@ -191,15 +225,28 @@ M5.3 interface-font and editor-font preferences should rebuild the semantic typo
 
 Future theme customization, if requested, should begin with a versioned, bounded palette mapped to semantic color roles. Layout dimensions, touch targets, semantics, modifier ordering, and component presence remain application controlled. Imported themes must pass contrast and schema checks and fall back atomically to a built-in theme.
 
-## 9. Migration sequence
+## 9. Implemented migration and remaining sequence
 
-1. Add characterization tests or screenshots for current light/dark theme selection and pure tests for any token invariants that do not require Compose instrumentation.
-2. Create `Lean4AndroidTheme` and move the root Material setup out of `MainActivity.kt` without changing default schemes.
-3. Introduce primitive and semantic tokens using the exact current values. Add invariants for nonnegative dimensions, min/max ordering, minimum interactive targets where applicable, and paired semantic colors.
-4. Extract the smallest well-bounded components first: `PaneSplitter`, `FileTabStrip`, `EditorSymbolRow`, `OutputPanel`, `GoalsPanel`, Messages, and Hover rendering. Give each a grouped default style and preserve caller-owned modifiers and semantics.
-5. Extract editor surface/gutter, project tree/drawer, workspace/open/settings surfaces, dialogs, and app bar where doing so improves ownership. Do not turn `MainActivity` state into a giant parameter list; introduce screen state/events deliberately if needed.
-6. Replace remaining unexplained visual literals. Allow local one-off literals only when they are intrinsic to a tiny illustration/algorithm or when promoting them would falsely imply reuse; require a short comment for surprising exceptions.
-7. Implement M5.0 popup Output and completion against the shared pane/popup styles, then implement M5.3 font preferences at the theme root.
+Completed:
+
+1. `Lean4AndroidTheme` owns the Material root and reactive dark/interface/editor-font
+   preferences.
+2. Typed semantic dimensions and grouped component styles use the accepted values.
+3. Goals, Output, Messages, splitters, tabs, symbol row, editor chrome, shell,
+   drawer/tree, settings surfaces, and Hover consume the shared theme.
+4. `LeanThemeTest` covers dimension invariants; focused/full Gradle validation and
+   API-33 physical acceptance preserved the visible editor and no-orphan baseline.
+5. M5.0 popup/completion and M5.3 font preferences were implemented without a
+   second theme mechanism.
+
+Remaining incremental work:
+
+1. Extract meaningful components from `MainActivity.kt` only when this reduces
+   ownership complexity without producing a giant state/event parameter list.
+2. Replace newly discovered unexplained reusable visual literals; leave genuinely
+   local structural values local and comment surprising exceptions.
+3. Add screenshot/Compose UI coverage where it is stable enough to catch contrast,
+   bounds, semantics, and touch-target regressions.
 
 Do not perform a single massive file move. Each increment should compile, keep diffs reviewable, and retain current behavior. Component extraction and visual-token substitution can be separate commits when that reduces risk.
 
@@ -209,20 +256,25 @@ Host validation should cover:
 
 - light/dark semantic token selection and stable preference restoration;
 - component-style construction and dimension invariants;
-- editor/gutter typography alignment when font preferences arrive;
+- editor/gutter typography alignment across every supported font preference;
 - semantic normal/error and active/inactive variants;
 - unchanged adaptive-policy tests in `EditorPaneLayoutTest`; and
 - Compose UI tests for content descriptions, touch/keyboard actions, and key component bounds where reliable.
 
-Physical API-33 validation should compare the accepted M4.6 surfaces in light and dark themes across tablet portrait/landscape and compact phone sizes. It must exercise drawer/tree reachability, tabs, editor/gutter alignment, symbol row, Messages normal/error, Goals right/bottom, Output, splitter drag/collapse, docked/floating IME, dialogs/settings, Activity recreation, and a real offline Run with no orphan child. Font scale and TalkBack/touch targets must not regress.
+Physical validation for a material style change should compare the accepted M4/M5
+surfaces in light and dark themes across tablet portrait/landscape and compact phone
+sizes. Exercise drawer/tree reachability, tabs, editor/gutter alignment, symbol row,
+Messages normal/error, Goals right/bottom, Docked/Popup Output, completion, splitter
+drag/collapse, docked/floating IME, settings/font scale, Activity recreation, and a
+real offline Run with no orphan child. TalkBack/touch targets must not regress.
 
 Exit criteria:
 
 - root theme setup and semantic visual tokens live outside activity/screen logic;
 - meaningful product components consume typed component styles instead of scattered visual literals;
 - adaptive behavior and accessibility remain explicit and tested rather than hidden in styles;
-- light/dark appearance, layouts, editor behavior, and process lifecycle retain the M4.6 acceptance baseline;
-- M5.0 and M5.3 can add popup and font variants without introducing a second styling mechanism; and
+- light/dark appearance, layouts, editor behavior, and process lifecycle retain the M4/M5 acceptance baseline;
+- later popup, completion, and font variants use the existing styling mechanism; and
 - the project has no external stylesheet parser, CSS cascade, arbitrary class-string system, or unnecessary UI dependency.
 
 ## 11. Revisit triggers

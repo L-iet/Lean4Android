@@ -1,84 +1,193 @@
 # Current UI overview
 
-Lean4Android currently uses a native Jetpack Compose UI. The main screen is a mobile IDE-style workspace built around a Material `Scaffold`: a top app bar sits above an adaptive editor workspace, while a navigation drawer and several dialogs or full-screen pages provide project, file, import/export, and settings workflows.
+This document is a map of the UI a user sees today and the code a new contributor
+should read first. Lean4Android uses a native Jetpack Compose interface; it does
+not embed a WebView or VS Code.
 
-The current production UI baseline is complete through M4.6. It includes multiple file tabs, a line-numbered Lean editor, search, syntax and diagnostic decoration, a Lean/Unicode symbol row, live LSP diagnostics and goals, collapsible/resizable panes, light/dark appearance settings, project navigation, and protected file/project lifecycle actions.
+Status: Android1 UI complete through M5.3 and physically accepted on the API-33
+reference tablet. The foreground lane is M6 hardening. Android2 is frozen at the
+shared Auto Goals/portrait IME baseline while its Mathlib lane proceeds.
 
-The planned separation of these composables from their visual tokens and component styles is specified in [`UI_STYLE_ARCHITECTURE.md`](UI_STYLE_ARCHITECTURE.md). That design preserves this behavioral structure while moving theme, color, typography, dimension, spacing, shape, and component visual contracts into a Compose-native Kotlin design system.
+## 1. Build the UI
 
-## Main screen structure
+Follow [the repository quick start](../../README.md) first. A UI build needs:
 
-The visible editor screen is assembled by `LeanEditorScreen` in [`app/src/main/java/org/lean4android/app/MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt). That composable owns transient UI state such as the open menus, drawer, search field, text-field selections, undo histories, run state, and collapsed-panel state. It also connects the visible controls to the activity's project, process, persistence, and LSP callbacks.
+- x86-64 Linux or Ubuntu under WSL 2;
+- JDK 17, Python 3, Git, `jq`, and Make;
+- Android SDK platform 36 and Build Tools 35.0.0; and
+- the audited Android1 distribution at
+  `toolchain/output/lean-4.32.1-android1`.
 
-At a high level, the screen is arranged as follows:
+The NDK/native cross-build is unnecessary for Kotlin/Compose-only changes when
+that audited distribution already exists. Check and build with:
+
+```shell
+make doctor
+make ui
+```
+
+`make ui` runs app unit tests and Kotlin compilation through the durable Gradle
+runner. Build the installable UI-bearing APK with:
+
+```shell
+make apk
+```
+
+The APK appears at `app/build/outputs/apk/debug/app-debug.apk`. A warm focused UI
+validation usually takes about 2–5 minutes in the recorded environment; cold
+toolchain staging on `/mnt/d` can take much longer. See
+[MVP_AND_REBUILDING.md](../../MVP_AND_REBUILDING.md) for setup, timing, and recovery.
+
+## 2. Visible application structure
+
+The main screen is built by `LeanEditorScreen` in
+[`MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt).
 
 ```text
 Top app bar
-├── navigation drawer button
-├── active filename and project-relative location
+├── navigation drawer
+├── active file/project identity
 ├── Run
 ├── Files menu
-└── More menu
+└── More menu (output and LSP actions)
 
 Adaptive workspace
-├── editor/output area
-│   ├── file tabs
-│   ├── optional Find row
-│   ├── line-numbered source editor
-│   ├── Lean/Unicode symbol row
-│   ├── Messages panel, when diagnostics exist
-│   └── Output splitter and Output panel
-└── Goals splitter and Goals panel
-    ├── right of the editor in landscape by default
-    └── below the editor in portrait by default
+├── browser-style file tabs
+├── optional Find row
+├── line-number gutter + source editor
+├── optional caret-adjacent completion popup
+├── configurable Lean/Unicode symbol row
+├── Messages (diagnostics)
+├── Output (docked pane or in-app popup)
+└── Goals / expected type / hover
+    ├── right side in landscape under Auto
+    └── bottom in portrait under Auto
 ```
 
-The Goals position can be set to Auto, Right side, or Bottom under Settings → Editor. Auto resolves to Bottom in portrait and Right side in landscape. Goals and Output have draggable, keyboard-operable, accessible splitters and independent persisted sizes/collapsed states. A docked on-screen keyboard temporarily hides Output without changing its saved state; Messages and the symbol row remain available in the resized workspace.
+Goals, Output, and Messages have independent collapse behavior. Goals and docked
+Output have accessible draggable/keyboard splitters and persisted fractions. A
+docked IME temporarily suppresses Output without changing its saved state. Auto
+Goals placement uses stable configuration orientation, not IME-reduced constraints,
+so opening Samsung's keyboard does not rebuild the editor and lose focus.
 
-The navigation drawer is also implemented in `MainActivity.kt`. It contains the collapsible hierarchical Project tree, build/runtime actions, project import/export and lifecycle actions, and Settings entry points. Open workspace, Settings, Appearance, Editor settings, confirmation dialogs, and file/project dialogs are rendered from the same main screen implementation.
+## 3. Menus, drawer, and settings
 
-## Where the requested UI code lives
+The drawer contains:
 
-| Region | Primary code | What it contains |
+- a contained hierarchical project tree with folder/file actions;
+- Build project and runtime verification actions;
+- project import/export, rename, and deletion;
+- Open workspace / Recent / My Projects; and
+- Settings pages.
+
+Files covers new/open/save/save-as/close and project creation. Long-press menus on
+projects, tabs, and tree entries provide guarded rename/delete actions. Unsupported
+or dirty destructive transitions require explicit choices.
+
+Current settings include:
+
+- light/dark appearance;
+- Goals position: Auto, Right side, or Bottom;
+- Docked or Popup Output;
+- automatic LSP completion;
+- symbol-row visibility, ordered contents, and restore defaults;
+- editor font sizes 12/14/16/18/20/22 sp;
+- interface scale 85/100/115/130 percent; and
+- About with copyable app/package/build/toolchain/schema identity and real
+  shell-free Lean/Lake version probes.
+
+## 4. Editor behavior
+
+Each recovered/open file has a visible tab. Dirty buffers are retained separately
+and recover atomically across process death. Lean files receive syntax decoration,
+diagnostic underlines, LSP synchronization, completion, goals, hover, definition,
+and references. Supported ordinary text files use the plain-text fallback and are
+not sent to Lean Server. Invalid UTF-8/binary content is handled explicitly rather
+than decoded blindly.
+
+The native selection toolbar preserves Android editing actions and adds one More
+entry that opens accessible Hover, Definition, and References actions. Definition
+opens contained targets at the returned UTF-16 position. References appear in a
+bounded sorted/deduplicated chooser. External/toolchain targets remain visible but
+non-navigable.
+
+## 5. Output and program input
+
+Output is distinct from live language-server state. Build/Run always reveals the
+selected Docked/Popup presentation and keeps bounded chronological display text.
+Terminal results retain independent raw stdout and stderr revisions for separate
+SAF export.
+
+Run offers three explicit stdin modes:
+
+- immediate EOF;
+- interactive Send line / EOF / Cancel; or
+- exact bytes from a validated saved project file, with dirty Save and Run / Run
+  saved version choices.
+
+`ProjectJobService` retains the sequence and input channel across Activity
+recreation. Prompt text is ordinary output; the UI never claims automatic prompt
+detection. Details are in [STDIN_SUPPORT.md](../project/STDIN_SUPPORT.md).
+
+## 6. Code ownership map
+
+| UI area | Primary code | Responsibility |
 | --- | --- | --- |
-| Top bar | [`MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt), the `Scaffold`/`TopAppBar` block in `LeanEditorScreen` | Hamburger button, active filename and path, Run button, Files menu, and More/LSP menu. |
-| Editor | [`MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt), primarily `EditorContent`, `FileTabStrip`, `EditorSymbolRow`, and `editorLineNumbers` | Tabs, Find row, gutter, `BasicTextField`, cursor callbacks, Hover context-menu action, symbol insertion, progress/cancel row, and placement of Messages and Output. |
-| Output panel | [`MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt), `OutputPanel`; placement is in `EditorContent` | Displays idle, running, cancelled, failed, completed run/build, and runtime-integrity results in selectable monospaced text. Its splitter and IME visibility behavior are managed by `EditorContent`. |
-| Messages panel | [`MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt), inside `EditorContent` | Shows the active file's current LSP diagnostics and count. It is collapsible, bounded and scrollable; only severity-1 diagnostics switch it to error colors. |
-| Goals panel | [`MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt), `GoalsPanel`; placement is in `LeanEditorScreen` | Shows Lean server status, tactic goals, expected types, Hover Markdown, completion text, navigation messages, and references. It can be placed right or bottom and collapsed or resized. |
+| App shell, drawer, screens, dialogs | [`MainActivity.kt`](../../app/src/main/java/org/lean4android/app/MainActivity.kt) | Compose structure, transient UI state, callbacks |
+| Theme and semantic styles | [`LeanTheme.kt`](../../app/src/main/java/org/lean4android/app/ui/theme/LeanTheme.kt) | Material root, dimensions, component styles, font scaling |
+| Tabs and dirty recovery | [`EditorSessionStore.kt`](../../app/src/main/java/org/lean4android/app/EditorSessionStore.kt) | tab identity/state and atomic snapshots |
+| Editor transforms | [`LeanEditorEngine.kt`](../../app/src/main/java/org/lean4android/app/LeanEditorEngine.kt) | undo/redo, search, UTF-16 mapping, decorations |
+| Pane policy | [`EditorPaneLayout.kt`](../../app/src/main/java/org/lean4android/app/EditorPaneLayout.kt) | orientation, IME visibility, clamping, severity |
+| Completion | [`LspCompletion.kt`](../../app/src/main/java/org/lean4android/app/LspCompletion.kt) | bounded/stale-safe completion presentation and edits |
+| Hover Markdown | [`HoverMarkdown.kt`](../../app/src/main/java/org/lean4android/app/HoverMarkdown.kt) | safe bounded native Markdown rendering |
+| Output mode | [`OutputPresentation.kt`](../../app/src/main/java/org/lean4android/app/OutputPresentation.kt) | Docked/Popup state policy |
+| Project tree | [`ProjectTree.kt`](../../app/src/main/java/org/lean4android/app/ProjectTree.kt) | compact hierarchical row model |
+| Editor/LSP bridge | [`EditorLspCoordinator.kt`](../../app/src/main/java/org/lean4android/app/EditorLspCoordinator.kt) | versioned sync and stale-result rejection |
+| Retained LSP | [`LeanLspService.kt`](../../app/src/main/java/org/lean4android/app/LeanLspService.kt) | per-project server ownership/reconnection |
+| Retained Build/Run | [`ProjectJobService.kt`](../../app/src/main/java/org/lean4android/app/ProjectJobService.kt) | sequence, streams, cancellation, snapshots |
 
-All three panels therefore have their visible Compose implementation in `MainActivity.kt`. They are not currently separate Kotlin UI files. `PaneSplitter`, also in that file, is the shared visible resize/collapse control used for Goals and Output; Messages has its own collapse control in its header.
+Most composables still live in `MainActivity.kt`; semantic visual decisions have
+moved to `LeanTheme.kt`. Incremental component extraction is allowed, but state,
+adaptive policy, accessibility, and process ownership must not be hidden in style
+objects. See [UI_STYLE_ARCHITECTURE.md](UI_STYLE_ARCHITECTURE.md).
 
-## Editor support files
+## 7. Data flow by surface
 
-The editor's visible Compose code is concentrated in `MainActivity.kt`, but several files own important non-visual behavior:
+- **Messages** consumes current-version diagnostics for the active Lean file; the
+  same data produces editor underlines.
+- **Goals** consumes current cursor goals/expected type and safe Hover content,
+  plus Lean Server status/navigation feedback.
+- **Completion** consumes bounded current-position candidates and applies one
+  normal editor-history edit.
+- **Output** consumes `EditorRunState` snapshots from `ProjectJobService`, not LSP.
+- **Project tree/tabs** consume repository and session models; they never traverse
+  arbitrary filesystem/provider paths directly.
 
-- [`EditorSessionStore.kt`](../../app/src/main/java/org/lean4android/app/EditorSessionStore.kt) defines `EditorTab` and `EditorSessionState`, including active-tab selection, dirty state, add/remove/rename behavior, and the atomic recovery snapshot store.
-- [`LeanEditorEngine.kt`](../../app/src/main/java/org/lean4android/app/LeanEditorEngine.kt) provides bounded undo/redo, Unicode-safe Find navigation, UTF-16 offset/position conversion, and the visual transformation for Lean syntax, search matches, and diagnostic underlines.
-- [`EditorPaneLayout.kt`](../../app/src/main/java/org/lean4android/app/EditorPaneLayout.kt) defines Goals-pane placement, pane-size clamping, collapsed/IME visibility rules, diagnostic severity coloring, and the compact-landscape project-tree threshold.
-- [`EditorLspCoordinator.kt`](../../app/src/main/java/org/lean4android/app/EditorLspCoordinator.kt) coordinates versioned editor documents with the retained Lean language-server session and rejects stale data.
-- [`LeanLspService.kt`](../../app/src/main/java/org/lean4android/app/LeanLspService.kt) owns the Android service boundary for the per-project Lean server used by Messages and Goals.
-- [`HoverMarkdown.kt`](../../app/src/main/java/org/lean4android/app/HoverMarkdown.kt) parses and renders the safe, bounded Markdown shown in the Goals panel for Hover results.
-- [`ProjectTree.kt`](../../app/src/main/java/org/lean4android/app/ProjectTree.kt) builds the compact hierarchical row model rendered by the navigation drawer's project tree.
+The complete cross-module picture is in [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
-## Data flow into the panels
+## 8. Tests and acceptance
 
-`MainActivity` receives versioned diagnostics and cursor inspection results from the retained Lean LSP service and stores the presentation-ready values in its `LspUiState`. `LeanEditorScreen` passes that state into `EditorContent` and `GoalsPanel`:
+The primary unit-test directory is
+[`app/src/test/java/org/lean4android/app`](../../app/src/test/java/org/lean4android/app).
+Notable suites cover editor transforms, session recovery, pane layout, LSP
+coordination, completion, output presentation, project trees, Hover Markdown, and
+theme invariants.
 
-- `EditorContent` selects diagnostics for the active file. The same diagnostic data produces underlines in the editor and rows in Messages.
-- `GoalsPanel` selects tactic goals and expected types for the active file, while Hover, completion, definition/reference feedback, and server status come from the same UI state.
-- `OutputPanel` does not use LSP state. It renders `EditorRunState`, which represents one-shot project build/run and runtime-verification work launched through the activity and `ProjectJobService`.
+After a UI behavior change:
 
-This division is important: Messages and Goals are language-server surfaces that update as the document/cursor changes, while Output is the result surface for explicit build, run, and verification jobs.
+```shell
+scripts/run-ui-gradle.sh :app:testDebugUnitTest :app:compileDebugKotlin
+```
 
-## Tests covering these areas
+Before device handoff:
 
-The main supporting unit tests are under [`app/src/test/java/org/lean4android/app`](../../app/src/test/java/org/lean4android/app):
+```shell
+make apk
+git diff --check
+```
 
-- `LeanEditorEngineTest.kt` and `LeanEditorSupportTest.kt` cover editor transforms, navigation, line numbers, symbols, and related helpers.
-- `EditorSessionStoreTest.kt` covers tabs, dirty state, recovery, and file lifecycle state transitions.
-- `EditorPaneLayoutTest.kt` covers Goals placement, pane clamping/visibility, diagnostic severity behavior, and compact layout rules.
-- `EditorLspCoordinatorTest.kt` covers document synchronization and stale-result rejection.
-- `HoverMarkdownTest.kt` covers the safe Markdown model rendered in Goals.
-
-Physical API-33 acceptance for the complete adaptive UI—including portrait/landscape and compact sizes, pane resizing/collapse, docked and floating keyboards, recreation, real diagnostics/goals, and no orphan Lean/Lake processes—is recorded in [`IMPLEMENTATION_HISTORY.md`](../../IMPLEMENTATION_HISTORY.md).
+Changes involving layout, IME, accessibility, Activity/service recreation,
+storage, or native processes require proportional emulator/physical-device
+validation. Preserve the continuous offline editor, project, LSP, build/run, and
+no-orphan baselines documented in
+[IMPLEMENTATION_HISTORY.md](../../IMPLEMENTATION_HISTORY.md).

@@ -2,6 +2,230 @@
 
 This document explains how the Android app and pinned Lean toolchains are constructed, how the build stages fit together, and which stages must be repeated after different kinds of changes. It is an operational guide; chronological discoveries and validation results live in `IMPLEMENTATION_HISTORY.md`, while future gates live in `IMPLEMENTATION_PLAN.md`.
 
+## Beginner build path
+
+This section is the recommended starting point for a clean machine. Later sections
+explain why each stage exists and how to rebuild only the affected layer.
+
+### A. Choose the build you actually need
+
+There are three useful paths:
+
+1. **Kotlin/UI development**: use a trusted existing audited Android1 distribution,
+   then run `make ui` or `make apk`. This avoids rebuilding Lean.
+2. **Normal APK build**: use the existing audited distribution and run `make apk`.
+   This runs unit tests and packages the complete debug APK.
+3. **Everything from source**: run `make all JOBS=4`. This fetches and builds the
+   pinned native dependencies, host Lean producer, Android Lean distribution,
+   tests, and APK. Use this only when no trusted distribution exists or native
+   toolchain inputs changed.
+
+The source repository does **not** contain the multi-gigabyte generated toolchain.
+Gradle requires this ignored directory:
+
+```text
+toolchain/output/lean-4.32.1-android1/
+├── manifest.json
+├── native/arm64-v8a/
+└── sysroot/
+```
+
+If a trusted maintainer or CI system gives you that complete audited directory,
+place it exactly there and skip the full native build. Verify its source, toolchain
+ID, manifest, and hashes; this repository currently declares no public prebuilt
+download URL. Never substitute Android2 output for Android1.
+
+### B. Supported host and capacity planning
+
+The checked-in native scripts currently support **x86-64 Linux**. Windows users
+should install [WSL 2](https://learn.microsoft.com/windows/wsl/install) and an
+Ubuntu distribution. The scripts select the NDK's `linux-x86_64` host toolchain,
+so native Windows and macOS are not currently supported full-build environments.
+Android Studio may still be used as an editor on those systems when the build is
+executed in Linux/WSL.
+
+Plan for tens of gigabytes of free host storage: source checkouts, host and Android
+object trees, a roughly 3.1 GB assembled distribution, Gradle state, staging, and
+the roughly 806 MB APK coexist. The installed app needs the APK plus roughly
+2.2 GB of writable sysroot data and temporary staging/rollback headroom. A native
+Linux filesystem is substantially faster than `/mnt/c` or `/mnt/d` under WSL.
+
+Recorded timings are observations, not guarantees:
+
+| Operation | Recorded range/context |
+| --- | --- |
+| Focused Kotlin/UI tests and compilation | commonly 2–5 minutes warm |
+| Warm full unit-test + APK build | commonly 4–6 minutes |
+| Cold/interrupted `/mnt/d` APK staging | 30–50 minutes has occurred |
+| Android2 filtered-manifest verification | about 130 seconds for 14,864 files |
+| Targeted Mathlib module producer | about 7,109 seconds (nearly 2 hours) |
+| Full clean Lean/Android toolchain | potentially many hours; reserve a workday and make it resumable |
+
+The final estimate is deliberately conservative: low-level Lean changes can
+regenerate thousands of dependent artifacts, and the history contains multi-hour
+and multi-day producer work. Do not interpret quiet `/mnt/d` I/O as a hang.
+
+### C. Install host prerequisites
+
+On Ubuntu or Ubuntu under WSL 2:
+
+```shell
+sudo apt update
+sudo apt install -y \
+  git openjdk-17-jdk python3 jq cmake ninja-build build-essential pkg-config perl \
+  unzip zip curl ca-certificates
+```
+
+What these tools do:
+
+| Tool | Used for | Official installation information |
+| --- | --- | --- |
+| JDK 17 | Gradle, Android Gradle Plugin, Kotlin | [JDK 17 installation guide](https://docs.oracle.com/en/java/javase/17/install/) |
+| Git | repository and pinned source checkouts | [Git downloads](https://git-scm.com/downloads) |
+| Python 3 | manifest generation, audit/progress helpers | [Python downloads](https://www.python.org/downloads/) |
+| C/C++ toolchain, pkg-config, CMake, Make, Ninja | host Lean, LibUV, and Android Lean builds | [CMake downloads](https://cmake.org/download/) |
+| Perl | OpenSSL configuration | [Perl downloads](https://www.perl.org/get.html) |
+| `jq` | distribution-manifest validation | [jq downloads](https://jqlang.org/download/) |
+| ZIP tools | pack inspection/prototyping | [Info-ZIP project](https://infozip.sourceforge.net/) |
+
+Ubuntu's [APT documentation](https://ubuntu.com/server/docs/how-to/software/package-management/)
+explains the package commands above. Check the installed versions:
+
+```shell
+java -version
+python3 --version
+git --version
+cmake --version
+ninja --version
+make --version
+pkg-config --version
+perl --version
+jq --version
+```
+
+`java -version` must report Java 17 for the canonical build.
+
+### D. Install the Android SDK, NDK, and CMake package
+
+Install either [Android Studio](https://developer.android.com/studio/install) or
+Google's [Android SDK command-line tools](https://developer.android.com/tools/sdkmanager).
+Put the command-line tools under `.android-sdk/cmdline-tools/latest`, or set
+`SDK_ROOT`/`ANDROID_SDK_ROOT` consistently if you use another location.
+
+From the repository root, install the pinned packages:
+
+```shell
+.android-sdk/cmdline-tools/latest/bin/sdkmanager \
+  --sdk_root="$PWD/.android-sdk" \
+  "platform-tools" \
+  "platforms;android-36" \
+  "build-tools;35.0.0" \
+  "ndk;28.2.13676358" \
+  "cmake;3.22.1"
+
+.android-sdk/cmdline-tools/latest/bin/sdkmanager \
+  --sdk_root="$PWD/.android-sdk" --licenses
+```
+
+Google documents side-by-side NDK/CMake installation in
+[Install and configure the NDK and CMake](https://developer.android.com/studio/projects/install-ndk).
+The full native scripts use the system `cmake` command and the pinned NDK; the SDK
+CMake package is retained for the Android project/tooling boundary.
+
+Configure Gradle after the SDK exists:
+
+```shell
+make configure-sdk
+```
+
+For a non-default SDK location:
+
+```shell
+make configure-sdk SDK_ROOT=/absolute/path/to/android-sdk
+export ANDROID_SDK_ROOT=/absolute/path/to/android-sdk
+```
+
+### E. Clone, inspect, and check prerequisites
+
+```shell
+git clone <repository-url> Lean4Android
+cd Lean4Android
+git status --short
+make help
+```
+
+Replace `<repository-url>` with the actual clone URL. A clean checkout prints
+nothing for `git status --short`.
+
+If you have a trusted audited distribution, place it at the path from step A and
+run:
+
+```shell
+make doctor
+```
+
+If you must build Lean from source, run:
+
+```shell
+make doctor-toolchain
+```
+
+### F. Build using the shortest applicable path
+
+With an existing audited distribution:
+
+```shell
+make ui       # app tests and Kotlin compilation
+make apk      # all unit tests and the Android1 debug APK
+```
+
+Without a distribution:
+
+```shell
+make toolchain JOBS=4
+make apk
+```
+
+Or equivalently:
+
+```shell
+make all JOBS=4
+```
+
+Use a conservative `JOBS` value when memory or foreground responsiveness matters.
+The Makefile is only a discoverable front end: it calls the checked-in scripts in
+the canonical order, and those scripts remain the source of truth.
+
+Successful APK output:
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+### G. Install and smoke-test on a device
+
+Use an AArch64 device/emulator running Android 10/API 29 or newer. Enable developer
+options and USB debugging, then authorize the host:
+
+```shell
+ADB_LIBUSB=1 .android-sdk/platform-tools/adb devices -l
+ADB_LIBUSB=1 .android-sdk/platform-tools/adb install --user 0 -r -t \
+  app/build/outputs/apk/debug/app-debug.apk
+```
+
+Cold-launch the app, let its verified sysroot installation finish, create/open a
+project, wait for `Lean server: Ready`, edit and save a Lean file, run an offline
+build, and confirm no Lean/Lake child remains after cancellation or app shutdown.
+Section 8 gives the fuller conformance sequence; the reference-device USB procedure
+is recorded in the repository [AGENTS.md](AGENTS.md).
+
+### H. If a command is interrupted
+
+Do not start over by deleting generated roots. Read the final checkpoint in
+`IMPLEMENTATION_HISTORY.md`, inspect `git status --short`, confirm whether the
+process is still alive, and rerun only the documented incremental stage. The one
+known AGP duplicate-compressed-assets recovery is documented in section 5.3.
+
 ## 1. Current build boundary
 
 The repository currently contains:
@@ -35,7 +259,7 @@ The current pins are authoritative:
 
 Change pins only as a deliberate toolchain revision. Update `toolchain/versions.toml`, the patch, manifests, documentation, and conformance expectations together.
 
-For the focused accepted-APK recovery procedure and the Android1/M4.6 milestone boundary, see [ANDROID1_REBUILD.md](ANDROID1_REBUILD.md).
+For focused recovery of the current Android1 APK from a preserved audited distribution, see [ANDROID1_REBUILD.md](ANDROID1_REBUILD.md).
 
 ## 2. Repository and generated trees
 
@@ -211,7 +435,7 @@ Assembly deletes and recreates the output distribution. On `/mnt/d`, copying the
 
 ### 5.1 Gradle modules
 
-The Android project contains `app`, `core-model`, `core-lsp`, `core-process`, and `core-toolchain`. The application currently depends on the model, process, and toolchain libraries plus Compose; `core-lsp` is deliberately isolated until the long-lived server supervisor is implemented. Unit tests cover toolchain IDs/path safety, shell-free process arguments, runtime layout/environment construction, visual-editor support, and byte-accurate LSP framing/lifecycle messages.
+The Android project contains `app`, `core-model`, `core-lsp`, `core-process`, `core-project`, and `core-toolchain`. The application depends on all five core libraries plus Compose. `core-lsp` owns protocol/session mechanics below the Android retained-service boundary; `core-project` owns contained workspace persistence and Lake-project policy. Unit tests cover toolchain IDs/path safety, shell-free process arguments, runtime layout/environment construction, contained project operations, editor/UI policy, and byte-accurate LSP framing/lifecycle behavior.
 
 ### 5.2 Toolchain staging
 
