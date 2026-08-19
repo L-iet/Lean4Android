@@ -38,6 +38,14 @@ producer state without disturbing it with:
 mathlib/scripts/status-android2-build.sh
 ```
 
+The subsequent editor gate exposed a blocking memory boundary documented in
+[`ANDROID2_MATHLIB_EDITOR_MEMORY_FAILURE.md`](ANDROID2_MATHLIB_EDITOR_MEMORY_FAILURE.md).
+One basic-prime document reaches Ready but retains roughly 1.85 GB in its Lean
+worker; restoring three Mathlib documents starts three workers and reproducibly
+causes foreground LMKD termination on the 6 GB reference tablet. Full-pack
+production may continue, but pack promotion now also requires a memory-aware
+active-document lifecycle and one/two/three-document physical conformance.
+
 The targeted command below remains its crash-recovery recipe and must not run
 concurrently with the full producer. The wrapper locks the producer, audits
 interrupted outputs, removes only proven temporary/damaged module facets, and

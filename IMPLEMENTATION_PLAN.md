@@ -421,6 +421,10 @@ Execution plan: [`docs/delivery/M5_MATHLIB_INTEGRATION_PLAN.md`](docs/delivery/M
 - Produce and verify a version-matched Mathlib pack.
 - Add pack install/remove/status UI, capacity reporting, and recoverable install-failure handling.
 - Profile memory, import latency, goal latency, and thermal behavior on a mid-range device.
+- Make Mathlib document synchronization memory-aware: start a worker only for the active
+  document, close or serialize inactive workers, enforce an aggregate app/Lake/Lean budget,
+  and recover into a one-document safe mode after a low-memory exit. Validate cold one-,
+  two-, and three-document restoration on physical devices before pack promotion.
 
 Exit: representative Mathlib files work offline without process death, and the distribution method meets store and license requirements.
 
@@ -518,6 +522,8 @@ Exit: symbol-row visibility/content and both font-size settings are durable, bou
 
 - Threat-model imported ZIPs/projects, any added UI dependency or popup/window boundary, native processes, and package manifests.
 - Run compatibility, soak, cancellation, corruption, and process-death tests; treat manufactured low-storage pressure as a stretch hardening case.
+- Add repeated low-memory-exit recovery and aggregate native-child memory telemetry to the
+  Mathlib release matrix; Android's app-process PSS alone is not an adequate budget signal.
 - Add crash reporting with opt-in/privacy controls, onboarding, licenses, backup policy, and a support bundle exporter.
 - Publish known limitations and supported Lean/package versions.
 - Test API 29 and current Android, multi-user/profile behavior, APK path migration, USB-independent production flows, and all supported delivery channels.
@@ -620,12 +626,12 @@ frozen at that shared feature baseline while its Mathlib build is pending. Do no
 rebuild or update-install Android2 for later Android1 changes until the Mathlib
 candidate is ready for its next integration gate; record any intentional exception.
 
-1. Treat Mathlib artifact production as a resumable parallel lane: inspect it with `mathlib/scripts/status-android2-build.sh`, resume the targeted `Mathlib.Data.Nat.Prime.Basic` command when machine capacity permits, and never run concurrent producers. At a successful target checkpoint, audit facets/header and complete the basic Android2 import test.
+1. Treat Mathlib artifact production as a resumable parallel lane: inspect it with `mathlib/scripts/status-android2-build.sh` and never run concurrent producers. The basic Android2 prime import gate succeeds in a one-file project but restoring three Mathlib files reproducibly triggers LMKD; keep the full producer running independently while the memory-aware active-document lifecycle in `docs/delivery/ANDROID2_MATHLIB_EDITOR_MEMORY_FAILURE.md` blocks pack promotion.
 2. Implement the UI style/theme architecture prerequisite from `docs/editor/UI_STYLE_ARCHITECTURE.md` before further UI feature work, using a staged Compose-native token/component migration that preserves M4.6 behavior.
 3. In the foreground lane, implement and validate the M5 dynamic Lake module-coverage corrective: inner-directory globbing, explicit top-level module reconciliation, supported-project migration, and the `<LeanProjectName>/New.lean` default path. It no longer waits for the slow targeted build, but must finish before broader/full Mathlib production.
 4. After both the targeted Android import gate and module corrective pass, start/resume the full version-matched Mathlib producer in parallel with independent product work. Measure capacity, recovery, latency, memory, and thermal behavior at explicit pack checkpoints without regressing the completed M2–M4 editor/project/LSP/lifecycle baselines.
 5. After the focused M5 Mathlib compatibility/feasibility gate, complete M5.0 in priority order: first Docked/Popup Output presentation with automatic Build/Run reveal, then enabled/disabled caret-anchored automatic LSP completion.
-6. M5.1 general project files/program streams and M5.2 direct definition/reference navigation are complete. Proceed with M5.3 symbol/font preferences before freezing features for M6 hardening and beta release.
+6. M5.1 through M5.3 are complete. Before the M6 feature freeze, implement and physically validate the Mathlib memory-aware active-document lifecycle without regressing retained dirty tabs or ordinary Core/Std multi-tab behavior.
 7. Keep auto-indent, code folding, Unicode abbreviation completion, and word wrap in post-beta M7 until their editing, source-mapping, IME, accessibility, and performance invariants are designed and measured.
 8. Convert M1.6 prototypes into release configuration: pin the independent-pack public key, add download/status UI if needed, and validate the signed AAB through Play Console/bundletool.
 9. Add API-29 and current-Android physical/emulator coverage throughout M5–M6 while retaining the offline M2 lifecycle, M3 editor/file/export behavior, and M4 interactive/pane baselines.
