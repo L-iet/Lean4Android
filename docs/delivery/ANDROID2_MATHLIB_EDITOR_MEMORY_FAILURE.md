@@ -10,6 +10,35 @@ Device: Samsung SM-T870, Android/API 33, 5,784,248 KiB physical RAM plus
 Toolchain/package: `lean-4.32.1-android2` /
 `org.lean4android.app.android2candidate`
 
+## Publicly documented requirements
+
+As of 2026-08-19, the public Lean 4 and Mathlib documentation inspected for
+this report does **not** publish a minimum or recommended RAM requirement for
+interactive Lean/Mathlib use:
+
+- Lean's [installation guide](https://lean-lang.org/install/manual/) lists its
+  installation dependencies and supported setup, but gives no RAM floor.
+- Lean's [source-build requirements](https://github.com/leanprover/lean4/blob/master/doc/make/index.md#requirements)
+  list compiler and library prerequisites, but no memory requirement.
+- Mathlib's [README](https://github.com/leanprover-community/mathlib4/blob/master/README.md)
+  and [project setup guide](https://leanprover-community.github.io/install/project.html)
+  recommend downloading precompiled cache artifacts and explain how to build
+  or use Mathlib, but do not state a supported memory class.
+
+There are public reports of workload-specific high memory use, including a
+[Lean 4 server issue](https://github.com/leanprover/lean4/issues/6753) whose
+non-Mathlib reproducer adds 1--2 GB while reprocessing a large definition.
+That is evidence that Lean memory depends strongly on the source, imports,
+server state, and concurrency; it is not a Mathlib system requirement. Older
+community discussions about Lean 3 or tools such as `mathport` are likewise
+not applicable requirements for this pinned Lean 4 interactive workload.
+
+Consequently, this report does not infer a general Mathlib minimum from the
+reference tablet. The measurements below establish only the supported or
+failing boundary of the exact Android toolchain, import, process topology, and
+device under test. A release recommendation still requires the broader matrix
+described under Required product work.
+
 ## Summary
 
 Opening the original `M5MathlibProbe` workspace can make the UI stutter and
@@ -137,6 +166,36 @@ such a sum.
 Thermal status remained 0. AP, battery, and skin readings were approximately
 31.3 C, 28.7 C, and 31.6 C. Temperature was not the cause.
 
+## Lean without Mathlib: existing measurements
+
+Earlier physical-device work did measure the pinned Android Lean server on
+Core/Std projects without Mathlib. The results provide scale, but they were not
+a controlled before/after experiment for this Android2 proof:
+
+| Workload on the same SM-T870 | Observed memory | Comparability limit |
+|---|---:|---|
+| Cold post-repair Core/Std LSP diagnostic | 544,681 KiB peak aggregate PSS; 674,488 KiB aggregate RSS | Short Android1 protocol probe; cold mappings and startup included |
+| Immediate warm repeat of that probe | 89,430 KiB aggregate PSS; 695,596 KiB aggregate RSS | Warm/cache state differs sharply; PSS and RSS account for shared pages differently |
+| Fully elaborated two-module Core/Std editor | 901,105 KiB aggregate PSS across four LSP-side processes; app 129,252 KiB PSS | Android1 editor session with two workers and different source/imports |
+| One-file `Mathlib.Data.Nat.Prime.Basic` editor | Worker 1,850,160 KiB PSS; Lake 924,583 KiB reported total PSS including 527,468 KiB swap PSS; coordinator 51,104 KiB; app 105,104 KiB | Android2, one Mathlib worker; values were sampled per process and must not be summed as exclusive physical RAM |
+
+The Mathlib document worker alone retained about 3.4 times the entire cold
+Core/Std protocol probe's aggregate PSS and about 2.1 times the four-process
+Core/Std editor aggregate. Those ratios make the size of the observed boundary
+clear, but they do **not** measure “memory used by Mathlib itself”: the runs
+differ in toolchain lane, document count, imports, startup/cache state, and
+sampling phase, while PSS changes as shared pages and swap residency change.
+The app-process figures (about 105--129 MB PSS) also reinforce that the UI heap
+was not the dominant difference.
+
+No paired measurement has yet run the same Android2 package, one-document
+topology, source shape, cold/warm sequence, sampling interval, and idle point
+first with Core/Std and then with the Mathlib import. Until that experiment is
+performed, the incremental Mathlib contribution cannot be separated cleanly
+from Lean/Lake baseline and workload effects. The release matrix should add
+that paired test and report per-process PSS/RSS, `MemAvailable`, swap PSS,
+`SwapFree`, PSI, and peak versus post-idle values for both cases.
+
 ## Root cause
 
 The current editor/session contract restores multiple tabs and synchronizes
@@ -185,4 +244,3 @@ Ignored durable captures are retained under `toolchain/output/`:
   UI switch, contaminated by the original project's startup); and
 - `android2-mathlib-prime-only-memory.log` and matching logcat (the clean
   one-file comparison).
-
