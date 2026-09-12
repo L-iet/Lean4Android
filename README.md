@@ -161,4 +161,4 @@ the source of truth and emit durable logs/heartbeats for long operations.
 
 ## Demo
 
-![Lean4Android Editor view](Screenshot_20260912_154147(1).gif)
+![Lean4Android Editor view](Screen_Recording_20260912_153952(1).gif)
